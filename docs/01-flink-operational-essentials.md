@@ -154,6 +154,84 @@ graph TB
 
 ### Task Execution Model
 
+Flink transforms logical operations into physical execution plans with parallel tasks. Let's examine how this works using a concrete example from `examples/01_basics/word_count.py`:
+
+#### Word Count Execution Example
+
+**Logical DAG** (from word_count.py):
+```python
+text = env.from_collection(lines)
+counts = text.flat_map(split_words) \
+             .key_by(lambda x: x[0]) \
+             .reduce(lambda a, b: (a[0], a[1] + b[1]))
+counts.print()
+```
+
+This creates the following operator chain:
+- **Source**: Read from collection (`lines`)
+- **FlatMap**: Split lines into (word, 1) tuples
+- **KeyBy**: Partition by word (first element of tuple)
+- **Reduce**: Sum counts per word
+- **Sink**: Print results
+
+**Physical Execution with Parallelism = 4**:
+
+When `env.set_parallelism(4)` is configured, Flink creates 4 parallel instances of each operator:
+
+```
+Input Data:
+["apache flink is great", "flink makes stream processing easy", ...]
+
+Parallel Execution:
+┌─────────────────────────────────────────────────────────────┐
+│ TaskManager 1 (Slots 1-2)                                   │
+├─────────────────────────────────────────────────────────────┤
+│ Slot 1:                                                     │
+│   Source-0 → FlatMap-0 → KeyBy-0 → Reduce-0 → Print-0     │
+│   Processes: ["apache flink is great"]                      │
+│                                                             │
+│ Slot 2:                                                     │
+│   Source-1 → FlatMap-1 → KeyBy-1 → Reduce-1 → Print-1     │
+│   Processes: ["flink makes stream processing easy"]        │
+└─────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────┐
+│ TaskManager 2 (Slots 3-4)                                   │
+├─────────────────────────────────────────────────────────────┤
+│ Slot 3:                                                     │
+│   Source-2 → FlatMap-2 → KeyBy-2 → Reduce-2 → Print-2     │
+│   Processes: ["apache flink apache spark"]                  │
+│                                                             │
+│ Slot 4:                                                     │
+│   Source-3 → FlatMap-3 → KeyBy-3 → Reduce-3 → Print-3     │
+│   Processes: ["stream processing with flink"]               │
+└─────────────────────────────────────────────────────────────┘
+
+Data Shuffle at KeyBy:
+  FlatMap-0 outputs: (apache,1), (flink,1), (is,1), (great,1)
+  FlatMap-1 outputs: (flink,1), (makes,1), (stream,1), ...
+  
+  KeyBy partitions by word hash:
+  - All "flink" tuples → Reduce-2 (example)
+  - All "apache" tuples → Reduce-0 (example)
+  - All "stream" tuples → Reduce-1 (example)
+  
+Final Output (from all Print sinks):
+  (flink, 6)
+  (apache, 3)
+  (stream, 2)
+  ...
+```
+
+**Key Execution Characteristics**:
+
+1. **Operator Chaining**: Flink chains operators that don't require data shuffle (Source → FlatMap) to minimize network overhead
+2. **Data Partitioning**: KeyBy triggers re-partitioning - all records with same key route to same parallel instance
+3. **Slot Sharing**: Multiple operators share same slot when possible, reducing resource usage
+4. **Pipeline Execution**: Data flows through operators in streaming fashion, not batch-by-batch
+
+#### Generic Task Execution Model
+
 ```mermaid
 graph LR
     subgraph "Logical DAG"

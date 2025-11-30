@@ -4,17 +4,16 @@ Module 1: Introduction to Apache Flink - Word Count Example
 
 This demonstrates:
 - Creating a StreamExecutionEnvironment
-- Reading from a socket source
+- Reading from a collection source
 - Basic transformations (flat_map, key_by, reduce)
 - Printing results
 
-To test:
-1. Terminal 1: nc -lk 9999
-2. Terminal 2: python examples/01_basics/word_count.py
-3. Type words in Terminal 1
+Note: PyFlink 1.20.0 doesn't support socket_text_stream in DataStream API.
+For socket streaming, you would need to use Flink connectors or Table API.
 """
 
 from pyflink.datastream import StreamExecutionEnvironment
+import time
 
 
 def word_count():
@@ -22,9 +21,17 @@ def word_count():
     env = StreamExecutionEnvironment.get_execution_environment()
     env.set_parallelism(1)
     
-    # Read text from socket
-    # Start a socket server: nc -lk 9999
-    text = env.socket_text_stream("localhost", 9999)
+    # Sample data - simulating a stream
+    lines = [
+        "apache flink is great",
+        "flink makes stream processing easy",
+        "apache flink apache spark",
+        "stream processing with flink",
+        "flink flink flink"
+    ]
+    
+    # Create stream from collection
+    text = env.from_collection(lines)
     
     # Split lines into words
     def split_words(line):
@@ -46,6 +53,8 @@ def word_count():
 
 if __name__ == '__main__':
     print("Starting Word Count example...")
-    print("Make sure to run: nc -lk 9999 in another terminal")
+    print("Processing sample text data...")
     print("-" * 60)
     word_count()
+    print("-" * 60)
+    print("✅ Word count complete!")

@@ -46,41 +46,41 @@ Flink's distributed architecture consists of interconnected components that work
 #### JobManager (Master)
 The control center of Flink, responsible for:
 - Receiving job submissions from clients
-- Converting logical job graphs into physical execution plans
-- Scheduling tasks across the cluster
-- Managing job lifecycle (starting, suspending, resuming)
-- Handling failure recovery and checkpoint coordination
-- Maintaining metadata about running jobs
+- Converting logical job graphs into `physical execution plans`
+- `Scheduling` tasks across the cluster
+- Managing `job lifecycle (starting, suspending, resuming)`
+- Handling `failure recovery` and `checkpoint` coordination
+- Maintaining `metadata` about running jobs
 
 #### TaskManager (Worker)
 Executes the actual processing work:
 - Runs operator tasks assigned by the JobManager
-- Provides task slots (execution units) for parallel processing
-- Manages local state and in-memory computation
+- Provides `task slots (execution units)` for parallel processing
+- Manages `local state` and in-memory computation
 - Reports task status and metrics back to JobManager
-- Performs shuffle operations to exchange data with other tasks
+- Performs shuffle operations to `exchange data with other tasks`
 
 #### ResourceManager
 Bridges Flink and external resource providers:
-- Manages task slots across the cluster
+- Manages `task slots` across the cluster
 - Communicates with Kubernetes/YARN/Standalone resource providers
 - Allocates TaskManagers based on JobManager requests
-- Dynamically scales the cluster up or down as needed
-- Handles resource lifecycle management
+- Dynamically `scales` the cluster up or down as needed
+- Handles `resource lifecycle` management
 
 #### Dispatcher
-Entry point for job submission:
-- Provides REST API for job submission
-- Hosts the web dashboard
+*Entry point* for job submission:
+- Provides `REST API` for job submission
+- Hosts the `web dashboard`
 - Manages multiple concurrent job submissions
-- Coordinates with JobManager for job execution
+- `Coordinates` with JobManager for job execution
 
 #### Checkpoint Coordinator
-Ensures fault tolerance:
+Ensures *fault tolerance*:
 - Triggers periodic state snapshots (checkpoints)
 - Coordinates checkpoint across all operators
 - Manages checkpoint barriers through the data stream
-- Stores checkpoint metadata and state
+- `Stores checkpoint metadata` and state
 
 ### Component Interactions
 
@@ -100,6 +100,56 @@ TaskManagers execute tasks in parallel
 Checkpoint Coordinator manages state snapshots
     ↓
 Data flows through operators via shuffle mechanism
+```
+
+### Component Architecture Diagram
+
+```mermaid
+graph TB
+    subgraph "Client Side"
+        Client["👤 Client<br/>Job Submission & Monitoring"]
+    end
+    
+    subgraph "Control Plane"
+        Dispatcher["🎛️ Dispatcher<br/>REST API Entry Point<br/>Dashboard Host"]
+        JobManager["👨‍💼 JobManager<br/>Orchestration & Scheduling<br/>Checkpoint Coordinator"]
+        ResourceManager["🏢 ResourceManager<br/>Resource Provider Interface<br/>Slot Management"]
+    end
+    
+    subgraph "Data Plane - Kubernetes Cluster"
+        subgraph "Worker Pods"
+            TM1["🔧 TaskManager 1<br/>- Slots: 4<br/>- Memory: 4GB<br/>- CPU: 2"]
+            TM2["🔧 TaskManager 2<br/>- Slots: 4<br/>- Memory: 4GB<br/>- CPU: 2"]
+            TM3["🔧 TaskManager 3<br/>- Slots: 4<br/>- Memory: 4GB<br/>- CPU: 2"]
+        end
+    end
+    
+    subgraph "State & Monitoring"
+        StateBackend["💾 State Backend<br/>S3/HDFS/RocksDB"]
+        Metrics["📊 Metrics System<br/>Prometheus/JMX"]
+    end
+    
+    Client -->|Submit Job| Dispatcher
+    Dispatcher -->|Forward Job| JobManager
+    
+    JobManager -->|Request Slots| ResourceManager
+    ResourceManager -->|Launch Pods| TM1
+    ResourceManager -->|Launch Pods| TM2
+    ResourceManager -->|Launch Pods| TM3
+    
+    JobManager -->|Assign Tasks| TM1
+    JobManager -->|Assign Tasks| TM2
+    JobManager -->|Assign Tasks| TM3
+    JobManager -->|Trigger Checkpoints| StateBackend
+    
+    TM1 -->|Shuffle Data| TM2
+    TM2 -->|Shuffle Data| TM3
+    TM1 -->|Report Status| Metrics
+    TM2 -->|Report Status| Metrics
+    TM3 -->|Report Status| Metrics
+    JobManager -->|Report Metrics| Metrics
+    
+    Client -->|Query Status| Dispatcher
 ```
 
 ---

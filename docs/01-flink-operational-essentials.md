@@ -109,13 +109,13 @@ graph TB
     subgraph "Client Side"
         Client["👤 Client<br/>Job Submission & Monitoring"]
     end
-    
+
     subgraph "Control Plane"
         Dispatcher["🎛️ Dispatcher<br/>REST API Entry Point<br/>Dashboard Host"]
         JobManager["👨‍💼 JobManager<br/>Orchestration & Scheduling<br/>Checkpoint Coordinator"]
         ResourceManager["🏢 ResourceManager<br/>Resource Provider Interface<br/>Slot Management"]
     end
-    
+
     subgraph "Data Plane - Kubernetes Cluster"
         subgraph "Worker Pods"
             TM1["🔧 TaskManager 1<br/>- Slots: 4<br/>- Memory: 4GB<br/>- CPU: 2"]
@@ -123,35 +123,93 @@ graph TB
             TM3["🔧 TaskManager 3<br/>- Slots: 4<br/>- Memory: 4GB<br/>- CPU: 2"]
         end
     end
-    
+
     subgraph "State & Monitoring"
         StateBackend["💾 State Backend<br/>S3/HDFS/RocksDB"]
         Metrics["📊 Metrics System<br/>Prometheus/JMX"]
     end
-    
+
     Client -->|Submit Job| Dispatcher
     Dispatcher -->|Forward Job| JobManager
-    
+
     JobManager -->|Request Slots| ResourceManager
     ResourceManager -->|Launch Pods| TM1
     ResourceManager -->|Launch Pods| TM2
     ResourceManager -->|Launch Pods| TM3
-    
+
     JobManager -->|Assign Tasks| TM1
     JobManager -->|Assign Tasks| TM2
     JobManager -->|Assign Tasks| TM3
     JobManager -->|Trigger Checkpoints| StateBackend
-    
+
     TM1 -->|Shuffle Data| TM2
     TM2 -->|Shuffle Data| TM3
     TM1 -->|Report Status| Metrics
     TM2 -->|Report Status| Metrics
     TM3 -->|Report Status| Metrics
     JobManager -->|Report Metrics| Metrics
-    
+
     Client -->|Query Status| Dispatcher
 ```
 
+### Task Execution Model
+
+```mermaid
+graph LR
+    subgraph "Logical DAG"
+        Source["Source<br/>Kafka Topic"]
+        Map["Map<br/>Enrich Data"]
+        KeyBy["KeyBy<br/>User ID"]
+        Aggregate["Aggregate<br/>Count Events"]
+        Sink["Sink<br/>Write to DB"]
+    end
+
+    subgraph "Physical Execution with 4 Parallelism"
+        S1["Source-0"] --> M1["Map-0"] --> K1["KeyBy-0"] --> A1["Aggregate-0"] --> SK1["Sink-0"]
+        S2["Source-1"] --> M2["Map-1"] --> K2["KeyBy-1"] --> A2["Aggregate-1"] --> SK2["Sink-1"]
+        S3["Source-2"] --> M3["Map-2"] --> K3["KeyBy-2"] --> A3["Aggregate-2"] --> SK3["Sink-2"]
+        S4["Source-3"] --> M4["Map-3"] --> K4["KeyBy-3"] --> A4["Aggregate-3"] --> SK4["Sink-3"]
+    end
+
+    Source -.->|Parallelizes| S1
+    Source -.->|Parallelizes| S2
+    Source -.->|Parallelizes| S3
+    Source -.->|Parallelizes| S4
+
+    style Source fill:#90EE90
+    style Map fill:#87CEEB
+    style KeyBy fill:#FFD700
+    style Aggregate fill:#FF6B6B
+    style Sink fill:#DDA0DD
+```
+
+### Slot and Task Distribution
+
+```mermaid
+graph TD
+    subgraph "TaskManager 1"
+        Slot1["Slot 1<br/>Source-0<br/>Map-0"]
+        Slot2["Slot 2<br/>KeyBy-0<br/>Aggregate-0"]
+        Slot3["Slot 3<br/>Source-1<br/>Map-1"]
+        Slot4["Slot 4<br/>KeyBy-1<br/>Aggregate-1"]
+    end
+
+    subgraph "TaskManager 2"
+        Slot5["Slot 1<br/>Source-2<br/>Map-2"]
+        Slot6["Slot 2<br/>KeyBy-2<br/>Aggregate-2"]
+        Slot7["Slot 3<br/>Source-3<br/>Map-3"]
+        Slot8["Slot 4<br/>KeyBy-3<br/>Aggregate-3"]
+    end
+
+    style Slot1 fill:#B0E0E6
+    style Slot2 fill:#B0E0E6
+    style Slot3 fill:#B0E0E6
+    style Slot4 fill:#B0E0E6
+    style Slot5 fill:#FFFFE0
+    style Slot6 fill:#FFFFE0
+    style Slot7 fill:#FFFFE0
+    style Slot8 fill:#FFFFE0
+```
 ---
 
 ## Kubernetes Operator Fundamentals {#kubernetes-operator}

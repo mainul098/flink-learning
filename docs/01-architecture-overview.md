@@ -1,0 +1,124 @@
+# Apache Flink Architecture Overview
+
+## Core Components
+
+### 1. JobManager (Master)
+The JobManager is the coordinator of the Flink cluster.
+
+**Responsibilities:**
+- Receives job submissions
+- Schedules tasks to TaskManagers
+- Coordinates checkpoints
+- Manages job lifecycle
+- Handles failures and recovery
+
+**Key Sub-components:**
+- **ResourceManager**: Manages TaskManager slots and resources
+- **Dispatcher**: Accepts job submissions and spawns JobMasters
+- **JobMaster**: Coordinates execution of a single job
+
+### 2. TaskManager (Worker)
+TaskManagers execute the actual data processing.
+
+**Responsibilities:**
+- Execute tasks assigned by JobManager
+- Manage task slots (execution threads)
+- Handle data exchange between tasks
+- Manage local state
+- Report status to JobManager
+
+**Components:**
+- Task slots for parallel execution
+- Network buffers for data exchange
+- State backends for local state
+- Metrics reporting
+
+### 3. Client
+The client submits jobs to the cluster.
+
+**Functions:**
+- Compiles user program into JobGraph
+- Submits JobGraph to Dispatcher
+- Retrieves job results
+- Can run in attached or detached mode
+
+## Deployment Modes
+
+### Session Mode
+- Long-running cluster shared by multiple jobs
+- JobManager and TaskManagers start independently
+- Jobs submitted to existing cluster
+- Resource sharing across jobs
+
+### Application Mode
+- Dedicated cluster per application
+- Main method runs on JobManager
+- Better isolation
+- Resource allocated per application
+
+### Per-Job Mode (Deprecated)
+- Cluster spun up per job
+- Torn down after completion
+- Good isolation but higher overhead
+
+## Data Flow Architecture
+
+```
+Client → Dispatcher → JobMaster → ResourceManager → TaskManager
+                           ↓
+                    Task Scheduling
+                           ↓
+                  Task Execution Graph
+```
+
+### Execution Graph Hierarchy
+
+1. **StreamGraph**: High-level representation from user code
+2. **JobGraph**: Optimized version with operator chaining
+3. **ExecutionGraph**: Parallel execution plan with tasks
+4. **Physical Graph**: Actual running tasks on TaskManagers
+
+## Task Slots and Parallelism
+
+- Each TaskManager has multiple task slots
+- Slot = fixed slice of resources (CPU, memory)
+- Tasks from same job can share slots (slot sharing)
+- Parallelism = number of parallel instances of an operator
+
+## Communication Layer
+
+### Data Exchange Patterns
+1. **Forward**: One-to-one between operators
+2. **Redistribute**: Round-robin distribution
+3. **Rebalance**: Load-balanced distribution
+4. **Rescale**: Local rebalancing
+5. **Broadcast**: Send to all parallel instances
+6. **KeyBy**: Hash-based partitioning
+
+### Network Stack
+- Network buffers for data exchange
+- Pipelined and blocking shuffle modes
+- Credit-based flow control
+- Backpressure propagation
+
+## High Availability
+
+### Components for HA
+- Multiple JobManagers (active/standby)
+- External coordination service (ZooKeeper/K8s)
+- Distributed storage for checkpoints
+- Leader election mechanism
+
+### Recovery Process
+1. Failure detected
+2. New leader elected
+3. Latest checkpoint retrieved
+4. Job restarted from checkpoint
+5. State restored
+
+## Next Steps
+
+- Explore Kubernetes Operator for cloud-native deployments
+- Understand resource management and configuration
+- Learn about fault tolerance mechanisms
+- Study performance tuning strategies

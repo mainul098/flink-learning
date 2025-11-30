@@ -1,0 +1,2 @@
+# PyFlink 1.20 with Python 3.10
+apache-flink==1.20.0

@@ -4,11 +4,11 @@
 
 1. [Introduction to Apache Flink](#introduction-to-apache-flink)
 2. [Architecture Overview](#architecture-overview)
-3. [Kubernetes Operator Fundamentals](#kubernetes-operator-fundamentals)
-4. [Cluster Management & Running on Kubernetes](#cluster-management--running-on-kubernetes)
-5. [Resource Management](#resource-management)
-6. [Task Management & Execution](#task-management--execution)
-7. [Application Deployment & Submission](#application-deployment--submission)
+3. [Resource Management](#resource-management)
+4. [Task Management & Execution](#task-management--execution)
+5. [Application Deployment & Submission](#application-deployment--submission)
+6. [Kubernetes Operator Fundamentals](#kubernetes-operator-fundamentals)
+7. [Cluster Management & Running on Kubernetes](#cluster-management--running-on-kubernetes)
 8. [Data Flow Processing Pipeline](#data-flow-processing-pipeline)
 9. [Event-Time Processing & Windowing](#event-time-processing--windowing)
 10. [State Management & Fault Tolerance](#state-management--fault-tolerance)
@@ -453,1135 +453,6 @@ flinkConfiguration:
 
 ---
 
-## Kubernetes Operator Fundamentals
-
-The Flink Kubernetes Operator is the standard way to deploy and manage Flink applications on Kubernetes. It uses Custom Resource Definitions (CRDs) to declare desired state, with the operator reconciling the actual cluster state to match.
-
-### Core Custom Resources
-
-#### FlinkDeployment
-
-Defines a complete Flink cluster deployment (either application or session cluster). Required fields:
-
-```yaml
-apiVersion: flink.apache.org/v1beta1
-kind: FlinkDeployment
-metadata:
-  namespace: default
-  name: my-flink-app
-spec:
-  image: flink:1.20
-  flinkVersion: v1_20
-  serviceAccount: flink
-  mode: native  # or standalone
-
-  jobManager:
-    resource:
-      memory: "2048m"
-      cpu: 1
-
-  taskManager:
-    resource:
-      memory: "2048m"
-      cpu: 1
-
-  flinkConfiguration:
-    taskmanager.numberOfTaskSlots: "2"
-    # Additional Flink config properties
-
-  # For Application deployments only
-  job:
-    jarURI: local:///opt/flink/examples/my-job.jar
-    parallelism: 4
-    upgradeMode: stateless  # or savepoint
-    state: running  # or suspended
-```
-
-**FlinkDeployment Resource States**:
-- `CREATED`: Resource created but not yet handled by operator
-- `DEPLOYED`: Running but may be rolled back
-- `STABLE`: Considered production-ready, won't be rolled back
-- `UPGRADING`: Being updated to new spec
-- `SUSPENDED`: Temporarily stopped
-- `FAILED`: Terminated due to error
-
-#### FlinkSessionJob
-
-Submits a job to an existing session cluster:
-
-```yaml
-apiVersion: flink.apache.org/v1beta1
-kind: FlinkSessionJob
-metadata:
-  name: my-session-job
-spec:
-  deploymentName: my-session-cluster  # Reference to FlinkDeployment
-  job:
-    jarURI: https://repo.example.com/my-job.jar
-    parallelism: 4
-    upgradeMode: stateless
-    state: running
-```
-
-#### FlinkStateSnapshot
-
-Manages savepoints and checkpoints:
-- Created automatically by operator for periodic savepoints
-- Can be manually triggered for upgrades or recovery
-- Stores snapshots externally for controlled recovery
-
-### Deployment Models
-
-#### Application Deployment
-- One Flink cluster per application
-- Dedicated JobManager for each job
-- Complete resource isolation
-- Suitable for production workloads with strict requirements
-- JobManager lifecycle tied to job lifecycle
-
-```yaml
-spec:
-  job:
-    jarURI: local:///path/to/job.jar
-    parallelism: 4
-```
-
-#### Session Deployment
-- Shared Flink cluster for multiple jobs
-- Single JobManager manages multiple jobs
-- Resource efficiency but less isolation
-- Each job submits independently
-
-```yaml
-# FlinkDeployment without spec.job field
-spec:
-  # No job field - creates empty session cluster
-```
-
-### Deployment Modes
-
-#### Native Mode (Recommended)
-- Flink directly manages Kubernetes resources
-- Dynamic TaskManager pod scaling based on demand
-- Direct communication between Flink and Kubernetes API
-- Most flexible and feature-rich
-- Recommended for standard deployments
-
-```yaml
-spec:
-  mode: native
-```
-
-#### Standalone Mode
-- Kubernetes orchestrates but Flink unaware of it
-- All resources created upfront by operator
-- Flink cannot scale dynamically
-- Increased security isolation
-- Useful when Flink must not access Kubernetes API
-
-```yaml
-spec:
-  mode: standalone
-```
-
-### Hands-On Example: Word Count on Kubernetes Operator
-
-Location: **`examples/03_k8s_operator/`**
-
-This example demonstrates a complete production-ready Flink streaming application deployed via the Kubernetes Operator.
-
-#### Application Overview
-
-**What it does:**
-- Reads text lines from Kafka topic `input-text`
-- Splits lines into individual words
-- Counts word occurrences using stateful aggregation
-- Outputs results to TaskManager logs
-- Demonstrates checkpointing and automatic fault tolerance
-
-**Architecture:**
-```
-FlinkDeployment: simple-word-count
-├── JobManager: 1 pod (1 CPU, 1GB memory)
-└── TaskManagers: 2 pods (1 CPU, 2GB memory each)
-    ├── TaskManager-1: 2 slots
-    └── TaskManager-2: 2 slots
-    Total: 4 slots = parallelism of 4
-
-Data Flow:
-Kafka → Source (4 parallel) → FlatMap (chained) → Map (chained)
-     → KeyBy (network shuffle) → Reduce (stateful, 4 parallel) → Print
-```
-
-#### Files Included
-
-```
-examples/03_k8s_operator/
-├── simple_word_count.py          # Python Flink application
-├── Dockerfile                     # Container image definition
-├── word-count-deployment.yaml     # FlinkDeployment + RBAC manifests
-├── deploy.sh                      # Automated deployment script
-└── README.md                      # Complete setup guide
-```
-
-#### Quick Start
-
-```bash
-# Navigate to example
-cd examples/03_k8s_operator
-
-# Deploy (installs operator if needed)
-./deploy.sh
-
-# Check status
-kubectl get flinkdeployment simple-word-count
-
-# Access Web UI
-kubectl port-forward svc/simple-word-count-rest 8081:8081
-# Open: http://localhost:8081
-
-# View word count output
-kubectl logs -l component=taskmanager -f
-```
-
-#### How It Works: Step-by-Step Workflow
-
-**Step 1: Operator Reconciliation Loop**
-
-When you apply the FlinkDeployment manifest:
-```bash
-kubectl apply -f word-count-deployment.yaml
-```
-
-The operator:
-1. **Detects** the new FlinkDeployment custom resource
-2. **Creates** JobManager deployment (1 pod)
-3. **Creates** JobManager service for RPC and Web UI
-4. **Waits** for JobManager to be ready
-
-**Step 2: JobManager Initialization**
-
-The JobManager pod:
-1. **Starts** Flink runtime
-2. **Loads** job configuration from FlinkDeployment spec
-3. **Parses** the Python application (`simple_word_count.py`)
-4. **Builds** logical DAG (Directed Acyclic Graph):
-   ```
-   Kafka Source → FlatMap → Map → KeyBy → Reduce → Print
-   ```
-5. **Requests** resources from Kubernetes
-
-**Step 3: TaskManager Creation**
-
-The operator (via JobManager request):
-1. **Creates** TaskManager deployment (2 replicas)
-2. Each TaskManager:
-   - Registers with JobManager
-   - Provides 2 task slots
-   - Total: 4 slots available (2 TMs × 2 slots)
-
-**Step 4: Task Scheduling and Execution**
-
-JobManager:
-1. **Converts** logical DAG to physical execution graph
-2. **Parallelizes** each operator 4 times (parallelism=4)
-3. **Chains** compatible operators (Source → FlatMap)
-4. **Assigns** tasks to the 4 available slots:
-
-```
-TaskManager 1:
-  Slot 1: [Source-0 → FlatMap-0] → [Reduce-0 → Print-0]
-  Slot 2: [Source-1 → FlatMap-1] → [Reduce-1 → Print-1]
-
-TaskManager 2:
-  Slot 3: [Source-2 → FlatMap-2] → [Reduce-2 → Print-2]
-  Slot 4: [Source-3 → FlatMap-3] → [Reduce-3 → Print-3]
-```
-
-**Step 5: Data Flow Execution**
-
-For each Kafka partition:
-1. **Source** operator reads text lines from Kafka
-2. **FlatMap** splits lines into individual words (lowercase)
-3. **Map** converts each word to tuple `(word, 1)`
-4. **KeyBy** partitions data by word (triggers network shuffle)
-   - All instances of "flink" go to the same Reduce task
-   - All instances of "apache" go to a different Reduce task
-5. **Reduce** aggregates counts for each word: `(word, count)`
-6. **Print** outputs to TaskManager logs
-
-**Step 6: Checkpointing (Fault Tolerance)**
-
-Every 60 seconds:
-1. **JobManager** triggers checkpoint
-2. **Checkpoint barriers** flow through the data stream
-3. Each operator **snapshots** its state:
-   - Kafka offsets
-   - Word count state
-4. State **persisted** to checkpoint storage (filesystem)
-5. On failure: Job **restarts** from last successful checkpoint
-
-#### Prerequisites
-
-**Install Flink Kubernetes Operator:**
-```bash
-# Add Helm repository
-helm repo add flink-operator-repo \
-  https://downloads.apache.org/flink/flink-kubernetes-operator-1.9.0/
-
-# Install operator
-helm install flink-kubernetes-operator \
-  flink-operator-repo/flink-kubernetes-operator \
-  --namespace flink-operator \
-  --create-namespace
-
-# Verify installation
-kubectl get pods -n flink-operator
-# Expected: flink-kubernetes-operator-xxxxx   1/1   Running
-```
-
-**Set Up Kafka (Optional for Testing):**
-```bash
-# Install Kafka using Helm
-helm repo add bitnami https://charts.bitnami.com/bitnami
-helm install kafka bitnami/kafka --namespace default
-
-# Create input topic
-kubectl run kafka-client --restart='Never' \
-  --image docker.io/bitnami/kafka:3.6.0 --command -- sleep infinity
-
-kubectl exec kafka-client -- kafka-topics.sh \
-  --create --topic input-text --bootstrap-server kafka:9092
-```
-
-#### Building the Application
-
-**Build Docker Image:**
-```bash
-cd examples/03_k8s_operator
-
-# Build the image
-docker build -t flink-word-count:latest .
-
-# If using Colima or local registry:
-docker tag flink-word-count:latest localhost:5000/flink-word-count:latest
-docker push localhost:5000/flink-word-count:latest
-```
-
-**Update Image Reference (if needed):**
-
-Edit `word-count-deployment.yaml`:
-```yaml
-spec:
-  image: localhost:5000/flink-word-count:latest  # Your registry
-```
-
-**Deploy to Kubernetes:**
-```bash
-# Apply manifest
-kubectl apply -f word-count-deployment.yaml
-
-# Watch deployment progress
-kubectl get flinkdeployment simple-word-count -w
-# Status: CREATED → DEPLOYING → STABLE
-# Job Status: (empty) → RUNNING
-
-# Verify pods
-kubectl get pods -l app=simple-word-count
-# Expected:
-# simple-word-count-jobmanager-xxx        1/1  Running
-# simple-word-count-taskmanager-1-xxx     1/1  Running
-# simple-word-count-taskmanager-2-xxx     1/1  Running
-```
-
-#### Key Configuration
-
-**FlinkDeployment Spec:**
-```yaml
-apiVersion: flink.apache.org/v1beta1
-kind: FlinkDeployment
-metadata:
-  name: simple-word-count
-spec:
-  image: flink-word-count:latest
-  flinkVersion: v1_20
-  mode: native  # Dynamic resource management
-  
-  jobManager:
-    resource:
-      memory: "1024m"
-      cpu: 1
-  
-  taskManager:
-    resource:
-      memory: "2048m"
-      cpu: 1
-    replicas: 2
-  
-  job:
-    jarURI: "local:///opt/flink/usrlib/simple_word_count.py"
-    parallelism: 4
-    upgradeMode: savepoint
-    state: running
-  
-  flinkConfiguration:
-    taskmanager.numberOfTaskSlots: "2"
-    execution.checkpointing.interval: "60000"
-    execution.checkpointing.mode: "EXACTLY_ONCE"
-    state.backend: "rocksdb"
-```
-
-#### Concepts Demonstrated
-
-**1. Operator Lifecycle:**
-- Declarative deployment via FlinkDeployment CRD
-- Operator watches and reconciles desired state
-- Automatic pod creation and management
-- Service creation for JobManager REST/RPC
-
-**2. Resource Allocation:**
-- JobManager: Lightweight orchestrator (1 CPU, 1GB)
-- TaskManagers: Workers with slots (1 CPU, 2GB each)
-- Calculation: 2 TaskManagers × 2 slots = 4 total slots
-- Parallelism matches slots for optimal utilization
-
-**3. Task Distribution:**
-```
-TaskManager-1:
-  Slot-1: [Source-0 → FlatMap-0] → [Reduce-0 → Print-0]
-  Slot-2: [Source-1 → FlatMap-1] → [Reduce-1 → Print-1]
-
-TaskManager-2:
-  Slot-3: [Source-2 → FlatMap-2] → [Reduce-2 → Print-2]
-  Slot-4: [Source-3 → FlatMap-3] → [Reduce-3 → Print-3]
-
-Note: Operators within [] are chained (no network overhead)
-      KeyBy triggers network shuffle between FlatMap and Reduce
-```
-
-**4. Fault Tolerance:**
-- Checkpointing every 60 seconds
-- RocksDB state backend for persistent state
-- Kafka offsets and word counts saved to checkpoints
-- On failure: Job restarts from last successful checkpoint
-- Test: `kubectl delete pod -l component=taskmanager --force`
-  - Observe automatic recovery without data loss
-
-**5. Data Parallelism:**
-```
-Kafka Topic (4 partitions)
-    ↓ ↓ ↓ ↓
-4 Source operators read in parallel
-    ↓ ↓ ↓ ↓
-4 FlatMap/Map instances process
-    ↓ ↓ ↓ ↓
-KeyBy: All "flink" tuples → same Reduce instance (hash partitioning)
-    ↓ ↓ ↓ ↓
-4 Reduce operators aggregate per key
-    ↓ ↓ ↓ ↓
-4 Print operators output results
-```
-
-#### Testing the Application
-
-**1. Set up Kafka (optional):**
-```bash
-# Install Kafka
-helm install kafka bitnami/kafka --namespace default
-
-# Create topic
-kubectl run kafka-client --restart='Never' \
-  --image docker.io/bitnami/kafka:3.6.0 --command -- sleep infinity
-
-kubectl exec kafka-client -- kafka-topics.sh \
-  --create --topic input-text --bootstrap-server kafka:9092
-```
-
-**2. Produce test data:**
-```bash
-kubectl exec -it kafka-client -- kafka-console-producer.sh \
-  --topic input-text --bootstrap-server kafka:9092
-
-# Type lines:
-> apache flink is a stream processing framework
-> flink runs on kubernetes with the operator
-> kubernetes makes flink deployment easy
-```
-
-**3. Observe results:**
-```bash
-kubectl logs -l component=taskmanager -f
-
-# Expected output:
-# (apache, 1)
-# (flink, 3)
-# (kubernetes, 2)
-# (stream, 1)
-# ...
-```
-
-#### Scaling Example
-
-**Scale from 4 to 8 parallelism:**
-```yaml
-# Edit word-count-deployment.yaml
-spec:
-  job:
-    parallelism: 8  # Was 4
-  
-  taskManager:
-    replicas: 4     # Was 2
-
-# Apply changes
-kubectl apply -f word-count-deployment.yaml
-
-# Operator performs:
-# 1. Takes savepoint of current state
-# 2. Stops old job gracefully
-# 3. Provisions 4 TaskManagers (8 slots total)
-# 4. Starts new job with 8 parallelism
-# 5. Restores state from savepoint
-```
-
-#### Monitoring
-
-**Flink Web UI:**
-- Job graph visualization
-- Task execution timeline
-- Checkpoint history and statistics
-- TaskManager metrics (CPU, memory, network)
-- Backpressure indicators
-
-**Metrics Endpoint:**
-```bash
-kubectl port-forward deployment/simple-word-count-taskmanager 9249:9249
-curl http://localhost:9249/metrics
-```
-
-**Key Metrics to Watch:**
-- `numRecordsIn`: Records read from Kafka
-- `numRecordsOut`: Records output by operators
-- `numberOfCompletedCheckpoints`: Successful checkpoints
-- `numberOfFailedCheckpoints`: Failed checkpoints (alert if > 0)
-- `lastCheckpointDuration`: Time to complete checkpoint
-
-#### Troubleshooting
-
-**Pods not starting:**
-```bash
-kubectl describe pod -l app=simple-word-count
-# Check: Image pull errors, resource constraints, RBAC permissions
-```
-
-**Job not running:**
-```bash
-kubectl logs -l component=jobmanager
-# Check: Kafka connection, Python syntax errors, checkpoint directory
-```
-
-**No output in logs:**
-```bash
-# Verify Kafka has data
-kubectl exec kafka-client -- kafka-console-consumer.sh \
-  --topic input-text --from-beginning --bootstrap-server kafka:9092
-
-# Check source metrics in Web UI
-# Navigate to: Running Jobs → Metrics → Source → numRecordsIn
-# Should be > 0 if reading data
-```
-
-#### Monitoring and Observability
-
-**Access Flink Web UI:**
-```bash
-# Port-forward to JobManager
-kubectl port-forward svc/simple-word-count-rest 8081:8081
-
-# Open in browser: http://localhost:8081
-```
-
-The Web UI provides:
-- **Job graph** with operators and parallelism visualization
-- **Task execution** timeline and status
-- **Checkpoint history** and success rate
-- **TaskManager metrics** (CPU, memory, network)
-- **Backpressure indicators** for performance bottlenecks
-
-**View Application Output:**
-```bash
-# JobManager logs (job lifecycle)
-kubectl logs -l app=simple-word-count,component=jobmanager -f
-
-# TaskManager logs (word count output)
-kubectl logs -l app=simple-word-count,component=taskmanager -f
-
-# Expected output:
-# (flink, 15)
-# (apache, 8)
-# (kubernetes, 5)
-```
-
-**Check Metrics:**
-```bash
-# Prometheus metrics endpoint
-kubectl port-forward deployment/simple-word-count-taskmanager 9249:9249
-curl http://localhost:9249/metrics
-
-# Key metrics to watch:
-# - numRecordsIn: Records read from Kafka
-# - numRecordsOut: Records output by operators
-# - numberOfCompletedCheckpoints: Successful checkpoints
-# - numberOfFailedCheckpoints: Failed checkpoints (alert if > 0)
-# - lastCheckpointDuration: Time to complete checkpoint
-```
-
-#### Testing with Data
-
-**Produce Test Data to Kafka:**
-```bash
-# Start Kafka producer
-kubectl exec -it kafka-client -- kafka-console-producer.sh \
-  --topic input-text --bootstrap-server kafka:9092
-
-# Type text (press Enter after each line):
-> apache flink is a stream processing framework
-> flink runs on kubernetes with the operator
-> kubernetes makes flink deployment easy
-> apache flink apache spark apache kafka
-```
-
-**Observe Results:**
-```bash
-kubectl logs -l component=taskmanager -f
-
-# You should see word counts:
-# (apache, 4)
-# (flink, 3)
-# (kubernetes, 2)
-# (stream, 1)
-# (processing, 1)
-# (framework, 1)
-```
-
-#### Next Steps
-
-Once you've deployed the basic example, try these enhancements:
-
-**1. Scale the Application:**
-```bash
-kubectl patch flinkdeployment simple-word-count --type=merge -p '
-{
-  "spec": {
-    "job": {"parallelism": 8},
-    "taskManager": {"replicas": 4}
-  }
-}'
-# Operator performs stateful upgrade via savepoint
-```
-
-**2. Add Kafka Sink:**
-Replace `print()` in `simple_word_count.py` with Kafka producer:
-```python
-from pyflink.datastream.connectors.kafka import KafkaSink
-
-kafka_sink = KafkaSink.builder() \
-    .set_bootstrap_servers("kafka:9092") \
-    .set_record_serializer(...) \
-    .build()
-
-word_counts.sink_to(kafka_sink)
-```
-
-**3. Implement Windowing:**
-Add tumbling windows for time-based aggregations:
-```python
-from pyflink.datastream.window import TumblingEventTimeWindows
-from pyflink.common import Time
-
-windowed_counts = word_counts \
-    .key_by(lambda x: x[0]) \
-    .window(TumblingEventTimeWindows.of(Time.minutes(5))) \
-    .reduce(...)
-```
-
-**4. Set Up Prometheus Monitoring:**
-```yaml
-# Add to FlinkDeployment
-flinkConfiguration:
-  metrics.reporter.prom.class: "org.apache.flink.metrics.prometheus.PrometheusReporter"
-  metrics.reporter.prom.port: "9249"
-
-# Create ServiceMonitor for Prometheus Operator
-apiVersion: monitoring.coreos.com/v1
-kind: ServiceMonitor
-metadata:
-  name: flink-metrics
-spec:
-  selector:
-    matchLabels:
-      app: simple-word-count
-  endpoints:
-  - port: metrics
-    interval: 30s
-```
-
-**5. Configure High Availability:**
-```yaml
-flinkConfiguration:
-  high-availability: "kubernetes"
-  high-availability.storageDir: "s3://my-bucket/flink-ha"
-```
-
-#### What You'll Learn
-
-By working through this example:
-- ✅ Kubernetes operator pattern (watch, reconcile, manage)
-- ✅ Flink architecture (JobManager, TaskManagers, slots)
-- ✅ Stream processing (sources, transformations, sinks)
-- ✅ Parallelism and data partitioning (KeyBy, shuffle)
-- ✅ Fault tolerance (checkpointing, state backends)
-- ✅ Resource management (CPU, memory, slots)
-- ✅ Observability (logs, metrics, Web UI)
-
-The example provides a solid foundation for building production-ready Flink applications on Kubernetes.
-
----
-
-## Cluster Management & Running on Kubernetes
-
-### Deploying a Flink Cluster
-
-**Step 1: Install Flink Kubernetes Operator**
-
-```bash
-helm repo add flink-operator-repo https://archive.apache.org/dist/flink/flink-kubernetes-operator-1.20.0/
-helm install flink-operator flink-operator-repo/flink-kubernetes-operator \
-  --namespace flink-operator \
-  --create-namespace
-```
-
-**Step 2: Create ServiceAccount and RBAC**
-
-```yaml
-apiVersion: v1
-kind: ServiceAccount
-metadata:
-  name: flink
-  namespace: default
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
-  name: flink
-rules:
-- apiGroups: [""]
-  resources: ["pods", "services"]
-  verbs: ["create", "delete", "deletecollection", "describe", "get", "list", "patch", "update", "watch"]
-- apiGroups: ["apps"]
-  resources: ["deployments", "deployments.apps"]
-  verbs: ["create", "delete", "deletecollection", "describe", "get", "list", "patch", "update", "watch"]
-- apiGroups: ["batch"]
-  resources: ["jobs"]
-  verbs: ["create", "delete", "deletecollection", "get", "list", "patch", "update", "watch"]
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
-metadata:
-  name: flink
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: ClusterRole
-  name: flink
-subjects:
-- kind: ServiceAccount
-  name: flink
-  namespace: default
-```
-
-**Step 3: Deploy Flink Application**
-
-```bash
-kubectl apply -f flink-deployment.yaml
-```
-
-**Step 4: Monitor Deployment**
-
-```bash
-# Check deployment status
-kubectl get flinkdeployment
-kubectl describe flinkdeployment my-flink-app
-
-# View operator logs
-kubectl logs -n flink-operator deployment/flink-operator
-
-# Access web UI
-kubectl port-forward svc/my-flink-app-rest 8081:8081
-# Visit http://localhost:8081
-```
-
-### Managing Cluster Lifecycle
-
-**Updating Configuration**
-
-Edit the FlinkDeployment and apply:
-
-```yaml
-# Update taskManager resource
-spec:
-  taskManager:
-    resource:
-      memory: "4096m"  # Changed from 2048m
-      cpu: 2          # Changed from 1
-```
-
-The operator will perform a rolling update without losing state.
-
-**Suspending Applications**
-
-```yaml
-spec:
-  job:
-    state: suspended
-```
-
-**Scaling Parallelism**
-
-```yaml
-spec:
-  job:
-    parallelism: 8  # Increase from 4
-```
-
-This triggers a savepoint-based upgrade, preserving state.
-
-**Deleting Deployments**
-
-```bash
-kubectl delete flinkdeployment my-flink-app
-```
-
-The operator ensures graceful shutdown and cleanup.
-
-### Complete Deployment Example: Running the Word Count Application
-
-**Location**: `examples/03_k8s_operator/`
-
-This section walks through deploying and managing the complete word count example on Kubernetes.
-
-#### Deployment Steps
-
-**Prerequisites:**
-```bash
-# 1. Ensure kubectl is configured
-kubectl cluster-info
-
-# 2. Install Flink Kubernetes Operator
-helm repo add flink-operator-repo \
-  https://downloads.apache.org/flink/flink-kubernetes-operator-1.9.0/
-helm install flink-kubernetes-operator flink-operator-repo/flink-kubernetes-operator \
-  --namespace flink-operator --create-namespace
-
-# 3. Verify operator is running
-kubectl get pods -n flink-operator
-```
-
-**Build and Deploy:**
-```bash
-cd examples/03_k8s_operator
-
-# Build Docker image
-docker build -t flink-word-count:latest .
-
-# Apply Kubernetes manifests
-kubectl apply -f word-count-deployment.yaml
-
-# Or use automated script
-./deploy.sh
-```
-
-#### Observing the Deployment Lifecycle
-
-**Phase 1: Operator Reconciliation**
-```bash
-# Watch FlinkDeployment status
-kubectl get flinkdeployment simple-word-count -w
-
-# Status progression:
-# LIFECYCLE STATE: CREATED → DEPLOYING → STABLE
-# JOB STATUS: (empty) → RUNNING
-```
-
-**Phase 2: Pod Creation**
-```bash
-# Watch pods being created
-kubectl get pods -l app=simple-word-count -w
-
-# Expected pods:
-# simple-word-count-jobmanager-xxx        1/1  Running
-# simple-word-count-taskmanager-1-xxx     1/1  Running
-# simple-word-count-taskmanager-2-xxx     1/1  Running
-```
-
-**Phase 3: Job Execution**
-```bash
-# Check JobManager logs for job submission
-kubectl logs -l component=jobmanager --tail=50
-
-# Look for:
-# - "Job has been submitted with JobID..."
-# - "Source: Kafka Source -> Map -> Reduce -> Sink"
-# - "Job ... switched from state CREATED to RUNNING"
-```
-
-**Phase 4: Task Scheduling**
-```bash
-# View TaskManager registration
-kubectl logs -l component=taskmanager --tail=20 | grep -i "registered"
-
-# Expected:
-# "Successful registration at JobManager"
-# "Offering 2 task slots to JobManager"
-```
-
-#### Managing the Running Application
-
-**Accessing Web UI:**
-```bash
-# Port-forward to JobManager REST service
-kubectl port-forward svc/simple-word-count-rest 8081:8081
-
-# Open in browser: http://localhost:8081
-
-# Web UI shows:
-# - Job graph with parallelism
-# - Running tasks and their status
-# - Checkpoint history
-# - TaskManager resource usage
-# - Backpressure metrics
-```
-
-**Viewing Application Output:**
-```bash
-# Stream TaskManager logs (word count output)
-kubectl logs -l component=taskmanager -f
-
-# Expected output format:
-# (apache, 3)
-# (flink, 6)
-# (kubernetes, 2)
-# ...
-```
-
-**Checking Checkpoint Status:**
-```bash
-# View checkpoint configuration
-kubectl exec -it $(kubectl get pod -l component=jobmanager -o name) -- \
-  curl -s localhost:8081/jobs/$(kubectl exec $(kubectl get pod -l component=jobmanager -o name) -- \
-  curl -s localhost:8081/jobs | jq -r '.jobs[0].id')/checkpoints
-
-# Shows:
-# - Number of completed checkpoints
-# - Latest checkpoint duration
-# - State size
-# - Alignment time
-```
-
-#### Lifecycle Management Operations
-
-**Scaling Parallelism:**
-```bash
-# Edit deployment manifest
-kubectl edit flinkdeployment simple-word-count
-
-# Change:
-spec:
-  job:
-    parallelism: 8  # From 4
-  taskManager:
-    replicas: 4     # From 2 (need 8 slots total)
-
-# Save and watch upgrade process
-kubectl get flinkdeployment simple-word-count -w
-
-# Operator performs:
-# 1. Triggers savepoint (state snapshot)
-# 2. Stops current job gracefully
-# 3. Scales TaskManagers to 4 replicas
-# 4. Starts job with parallelism=8
-# 5. Restores state from savepoint
-```
-
-**Updating Configuration:**
-```bash
-# Modify checkpoint interval
-kubectl patch flinkdeployment simple-word-count --type=merge -p '
-{
-  "spec": {
-    "flinkConfiguration": {
-      "execution.checkpointing.interval": "30000"
-    }
-  }
-}'
-
-# Operator triggers stateful upgrade via savepoint
-```
-
-**Suspending Application:**
-```bash
-# Suspend job (takes final savepoint)
-kubectl patch flinkdeployment simple-word-count --type=merge -p '
-{
-  "spec": {
-    "job": {
-      "state": "suspended"
-    }
-  }
-}'
-
-# Operator:
-# 1. Triggers savepoint
-# 2. Cancels job
-# 3. Keeps savepoint for later resume
-# 4. Removes TaskManager pods (JobManager remains)
-
-# Resume later
-kubectl patch flinkdeployment simple-word-count --type=merge -p '
-{
-  "spec": {
-    "job": {
-      "state": "running"
-    }
-  }
-}'
-```
-
-#### Testing Fault Tolerance
-
-**Simulate TaskManager Failure:**
-```bash
-# Delete a TaskManager pod
-kubectl delete pod -l component=taskmanager --force --grace-period=0 | head -n1
-
-# Watch recovery
-kubectl get pods -l app=simple-word-count -w
-
-# Observe:
-# 1. Pod termination detected
-# 2. Job transitions to RESTARTING
-# 3. Operator creates new TaskManager pod
-# 4. Job restarts from last checkpoint
-# 5. State restored (Kafka offsets, word counts)
-# 6. Processing resumes
-
-# Verify no data loss
-kubectl logs -l component=taskmanager -f
-# Word counts continue from previous values
-```
-
-**Simulate JobManager Failure:**
-```bash
-# Delete JobManager pod
-kubectl delete pod -l component=jobmanager --force
-
-# Operator automatically:
-# 1. Detects JobManager pod deletion
-# 2. Creates new JobManager pod
-# 3. New JobManager reads checkpoint metadata
-# 4. Discovers last successful checkpoint
-# 5. Restores job from checkpoint
-# 6. TaskManagers reconnect
-# 7. Processing resumes
-
-# Check recovery time
-kubectl get pods -l component=jobmanager -w
-# Typically 30-60 seconds for full recovery
-```
-
-#### Monitoring and Debugging
-
-**Check Resource Usage:**
-```bash
-# Pod resource consumption
-kubectl top pods -l app=simple-word-count
-
-# Expected (under load):
-# JobManager:  ~50% CPU, ~800MB memory
-# TaskManager: ~80% CPU, ~1.5GB memory (per pod)
-```
-
-**Diagnose Checkpoint Failures:**
-```bash
-# View checkpoint statistics
-kubectl exec $(kubectl get pod -l component=jobmanager -o name) -- \
-  curl -s localhost:8081/jobs/$(kubectl exec $(kubectl get pod -l component=jobmanager -o name) -- \
-  curl -s localhost:8081/jobs | jq -r '.jobs[0].id')/checkpoints/config
-
-# Common issues:
-# - "Checkpoint expired": Increase timeout
-# - "State too large": Enable incremental checkpoints
-# - "Alignment timeout": Check for backpressure
-```
-
-**Investigate Backpressure:**
-```bash
-# Check backpressure via Web UI
-# Navigate to: Running Jobs → BackPressure tab
-
-# Or via REST API
-kubectl exec $(kubectl get pod -l component=jobmanager -o name) -- \
-  curl -s localhost:8081/jobs/$(kubectl exec $(kubectl get pod -l component=jobmanager -o name) -- \
-  curl -s localhost:8081/jobs | jq -r '.jobs[0].id')/vertices
-
-# If backpressure detected:
-# - Increase parallelism of bottleneck operator
-# - Add more TaskManager resources
-# - Tune network buffers
-```
-
-#### Cleanup
-
-```bash
-# Delete FlinkDeployment (graceful shutdown)
-kubectl delete flinkdeployment simple-word-count
-
-# Operator performs:
-# 1. Triggers final savepoint (if configured)
-# 2. Cancels job
-# 3. Deletes TaskManager pods
-# 4. Deletes JobManager pod
-# 5. Deletes associated services
-# 6. Retains checkpoints (if externalized)
-
-# Verify cleanup
-kubectl get pods -l app=simple-word-count
-# No resources found
-
-# Uninstall operator (optional)
-helm uninstall flink-kubernetes-operator -n flink-operator
-```
-
-#### Key Takeaways
-
-**Operator Benefits:**
-- ✅ Declarative management: Describe desired state in YAML
-- ✅ Automatic lifecycle: Operator handles pod creation, scaling, upgrades
-- ✅ Stateful upgrades: Savepoint-based upgrades preserve state
-- ✅ Self-healing: Automatic recovery on failures
-- ✅ Resource efficiency: Dynamic TaskManager scaling
-
-**Production Considerations:**
-- Always enable checkpoint externalization for recovery
-- Use savepoint upgrade mode for stateful applications
-- Monitor checkpoint success rate (alert on failures)
-- Configure resource requests/limits appropriately
-- Use persistent volumes for large state (not ephemeral storage)
-- Set up high availability for JobManager
-
-For detailed application code and advanced scenarios:
-- **`examples/03_k8s_operator/README.md`**
-
----
-
 ## Resource Management
 
 ### CPU and Memory Configuration
@@ -1862,6 +733,275 @@ Operator workflow:
 | `stateless` | Discards state, fresh start | Non-stateful jobs, experiments |
 | `savepoint` | Preserves state via savepoint | Production with state |
 | `last-state` | Uses last checkpoint | Development/testing |
+
+---
+
+## Kubernetes Operator Fundamentals
+
+The Flink Kubernetes Operator is the standard way to deploy and manage Flink applications on Kubernetes. It uses Custom Resource Definitions (CRDs) to declare desired state, with the operator reconciling the actual cluster state to match.
+
+### Core Custom Resources
+
+#### FlinkDeployment
+
+Defines a complete Flink cluster deployment (either application or session cluster). Required fields:
+
+```yaml
+apiVersion: flink.apache.org/v1beta1
+kind: FlinkDeployment
+metadata:
+  namespace: default
+  name: my-flink-app
+spec:
+  image: flink:1.20
+  flinkVersion: v1_20
+  serviceAccount: flink
+  mode: native  # or standalone
+
+  jobManager:
+    resource:
+      memory: "2048m"
+      cpu: 1
+
+  taskManager:
+    resource:
+      memory: "2048m"
+      cpu: 1
+
+  flinkConfiguration:
+    taskmanager.numberOfTaskSlots: "2"
+    # Additional Flink config properties
+
+  # For Application deployments only
+  job:
+    jarURI: local:///opt/flink/examples/my-job.jar
+    parallelism: 4
+    upgradeMode: stateless  # or savepoint
+    state: running  # or suspended
+```
+
+**FlinkDeployment Resource States**:
+- `CREATED`: Resource created but not yet handled by operator
+- `DEPLOYED`: Running but may be rolled back
+- `STABLE`: Considered production-ready, won't be rolled back
+- `UPGRADING`: Being updated to new spec
+- `SUSPENDED`: Temporarily stopped
+- `FAILED`: Terminated due to error
+
+#### FlinkSessionJob
+
+Submits a job to an existing session cluster:
+
+```yaml
+apiVersion: flink.apache.org/v1beta1
+kind: FlinkSessionJob
+metadata:
+  name: my-session-job
+spec:
+  deploymentName: my-session-cluster  # Reference to FlinkDeployment
+  job:
+    jarURI: https://repo.example.com/my-job.jar
+    parallelism: 4
+    upgradeMode: stateless
+    state: running
+```
+
+#### FlinkStateSnapshot
+
+Manages savepoints and checkpoints:
+- Created automatically by operator for periodic savepoints
+- Can be manually triggered for upgrades or recovery
+- Stores snapshots externally for controlled recovery
+
+### Deployment Models
+
+#### Application Deployment
+- One Flink cluster per application
+- Dedicated JobManager for each job
+- Complete resource isolation
+- Suitable for production workloads with strict requirements
+- JobManager lifecycle tied to job lifecycle
+
+```yaml
+spec:
+  job:
+    jarURI: local:///path/to/job.jar
+    parallelism: 4
+```
+
+#### Session Deployment
+- Shared Flink cluster for multiple jobs
+- Single JobManager manages multiple jobs
+- Resource efficiency but less isolation
+- Each job submits independently
+
+```yaml
+# FlinkDeployment without spec.job field
+spec:
+  # No job field - creates empty session cluster
+```
+
+### Deployment Modes
+
+#### Native Mode (Recommended)
+- Flink directly manages Kubernetes resources
+- Dynamic TaskManager pod scaling based on demand
+- Direct communication between Flink and Kubernetes API
+- Most flexible and feature-rich
+- Recommended for standard deployments
+
+```yaml
+spec:
+  mode: native
+```
+
+#### Standalone Mode
+- Kubernetes orchestrates but Flink unaware of it
+- All resources created upfront by operator
+- Flink cannot scale dynamically
+- Increased security isolation
+- Useful when Flink must not access Kubernetes API
+
+```yaml
+spec:
+  mode: standalone
+```
+
+### Hands-On Example
+
+For a complete, production-ready example of deploying Flink on Kubernetes, see:
+- **`examples/03_k8s_operator/README.md`** - Word Count application with step-by-step deployment guide
+
+The example demonstrates:
+- FlinkDeployment configuration and RBAC setup
+- Building and deploying containerized Flink applications
+- Operator reconciliation and lifecycle management
+- Checkpointing and fault tolerance testing
+- Scaling, configuration updates, and suspend/resume operations
+
+---
+
+## Cluster Management & Running on Kubernetes
+
+### Deploying a Flink Cluster
+
+**Step 1: Install Flink Kubernetes Operator**
+
+```bash
+helm repo add flink-operator-repo https://archive.apache.org/dist/flink/flink-kubernetes-operator-1.20.0/
+helm install flink-operator flink-operator-repo/flink-kubernetes-operator \
+  --namespace flink-operator \
+  --create-namespace
+```
+
+**Step 2: Create ServiceAccount and RBAC**
+
+```yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: flink
+  namespace: default
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: flink
+rules:
+- apiGroups: [""]
+  resources: ["pods", "services"]
+  verbs: ["create", "delete", "deletecollection", "describe", "get", "list", "patch", "update", "watch"]
+- apiGroups: ["apps"]
+  resources: ["deployments", "deployments.apps"]
+  verbs: ["create", "delete", "deletecollection", "describe", "get", "list", "patch", "update", "watch"]
+- apiGroups: ["batch"]
+  resources: ["jobs"]
+  verbs: ["create", "delete", "deletecollection", "get", "list", "patch", "update", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: flink
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: flink
+subjects:
+- kind: ServiceAccount
+  name: flink
+  namespace: default
+```
+
+**Step 3: Deploy Flink Application**
+
+```bash
+kubectl apply -f flink-deployment.yaml
+```
+
+**Step 4: Monitor Deployment**
+
+```bash
+# Check deployment status
+kubectl get flinkdeployment
+kubectl describe flinkdeployment my-flink-app
+
+# View operator logs
+kubectl logs -n flink-operator deployment/flink-operator
+
+# Access web UI
+kubectl port-forward svc/my-flink-app-rest 8081:8081
+# Visit http://localhost:8081
+```
+
+### Managing Cluster Lifecycle
+
+**Updating Configuration**
+
+Edit the FlinkDeployment and apply:
+
+```yaml
+# Update taskManager resource
+spec:
+  taskManager:
+    resource:
+      memory: "4096m"  # Changed from 2048m
+      cpu: 2          # Changed from 1
+```
+
+The operator will perform a rolling update without losing state.
+
+**Suspending Applications**
+
+```yaml
+spec:
+  job:
+    state: suspended
+```
+
+**Scaling Parallelism**
+
+```yaml
+spec:
+  job:
+    parallelism: 8  # Increase from 4
+```
+
+This triggers a savepoint-based upgrade, preserving state.
+
+**Deleting Deployments**
+
+```bash
+kubectl delete flinkdeployment my-flink-app
+```
+
+The operator ensures graceful shutdown and cleanup.
+
+### Complete Deployment Example
+
+For a complete, hands-on deployment example with step-by-step instructions, see:
+- **`examples/03_k8s_operator/README.md`** - Word Count application deployment guide
+
+The example covers deployment lifecycle, fault tolerance testing, scaling operations, and troubleshooting.
 
 ---
 

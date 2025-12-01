@@ -448,33 +448,6 @@ flinkConfiguration:
 # Result: Job fails with "Not enough task slots available"
 ```
 
-#### Generic Slot Distribution Pattern
-
-```mermaid
-graph TD
-    subgraph "TaskManager 1"
-        Slot1["Slot 1<br/>Source-0<br/>Map-0"]
-        Slot2["Slot 2<br/>KeyBy-0<br/>Aggregate-0"]
-        Slot3["Slot 3<br/>Source-1<br/>Map-1"]
-        Slot4["Slot 4<br/>KeyBy-1<br/>Aggregate-1"]
-    end
-
-    subgraph "TaskManager 2"
-        Slot5["Slot 1<br/>Source-2<br/>Map-2"]
-        Slot6["Slot 2<br/>KeyBy-2<br/>Aggregate-2"]
-        Slot7["Slot 3<br/>Source-3<br/>Map-3"]
-        Slot8["Slot 4<br/>KeyBy-3<br/>Aggregate-3"]
-    end
-
-    style Slot1 fill:#B0E0E6
-    style Slot2 fill:#B0E0E6
-    style Slot3 fill:#B0E0E6
-    style Slot4 fill:#B0E0E6
-    style Slot5 fill:#FFFFE0
-    style Slot6 fill:#FFFFE0
-    style Slot7 fill:#FFFFE0
-    style Slot8 fill:#FFFFE0
-```
 ---
 
 ## Kubernetes Operator Fundamentals {#kubernetes-operator}

@@ -134,73 +134,27 @@ Source Partition 4 ──► Map Instance 4 ──► Sink Instance 4
 
 Flink uses a **master-worker architecture**:
 
-```mermaid
-graph TB
-    subgraph "You (Developer)"
-        Client["💻 Client<br/>Your Application Code"]
-    end
+### Core Components
 
-    subgraph "Control Plane (The Brain)"
-        JM["🧠 JobManager<br/>Coordinates everything"]
-        RM["📦 ResourceManager<br/>Manages workers"]
-        Dispatcher["🚪 Dispatcher<br/>Entry point & Web UI"]
-    end
+Flink's distributed architecture consists of interconnected components that work together to enable reliable stream processing:
 
-    subgraph "Data Plane (The Workers)"
-        TM1["⚙️ TaskManager 1"]
-        TM2["⚙️ TaskManager 2"]
-        TM3["⚙️ TaskManager 3"]
-    end
+#### JobManager (Master)
+The control center of Flink, responsible for:
+- Receiving job submissions from clients
+- Converting logical job graphs into `physical execution plans`
+- `Scheduling` tasks across the cluster
+- Managing `job lifecycle (starting, suspending, resuming)`
+- Handling `failure recovery` and `checkpoint` coordination
+- Maintaining `metadata` about running jobs
 
-    subgraph "External Systems"
-        Source["📥 Source<br/>(Kafka, etc.)"]
-        Sink["📤 Sink<br/>(Database, etc.)"]
-        State["💾 State Backend<br/>(S3, RocksDB)"]
-    end
+#### TaskManager (Worker)
+Executes the actual processing work:
+- Runs operator tasks assigned by the JobManager
+- Provides `task slots (execution units)` for parallel processing
+- Manages `local state` and in-memory computation
+- Reports task status and metrics back to JobManager
+- Performs shuffle operations to `exchange data with other tasks`
 
-    Client -->|"1. Submit Job"| Dispatcher
-    Dispatcher -->|"2. Start Job"| JM
-    JM -->|"3. Request Workers"| RM
-    RM -->|"4. Create/Assign"| TM1
-    RM -->|"4. Create/Assign"| TM2
-    RM -->|"4. Create/Assign"| TM3
-
-    JM -->|"5. Distribute Tasks"| TM1
-    JM -->|"5. Distribute Tasks"| TM2
-    JM -->|"5. Distribute Tasks"| TM3
-
-    Source --> TM1
-    Source --> TM2
-    Source --> TM3
-
-    TM1 --> Sink
-    TM2 --> Sink
-    TM3 --> Sink
-
-    TM1 -.->|"Checkpoint"| State
-    TM2 -.->|"Checkpoint"| State
-    TM3 -.->|"Checkpoint"| State
-```
-
-### Component Breakdown
-
-#### JobManager (The Coordinator)
-The **brain** of a Flink cluster:
-- Receives your job and creates an execution plan
-- Decides which TaskManager runs which task
-- Coordinates checkpoints for fault tolerance
-- Handles failures and restarts
-
-**Analogy**: Like a construction foreman who reads blueprints and assigns workers to tasks.
-
-#### TaskManager (The Worker)
-The **muscle** that does actual data processing:
-- Runs your operators (map, filter, aggregate, etc.)
-- Manages local state
-- Exchanges data with other TaskManagers
-- Reports status to JobManager
-
-**Analogy**: Like construction workers who do the actual building.
 
 #### Task Slots (Worker Capacity)
 Each TaskManager has a fixed number of **slots** - think of them as "seats" for tasks:
@@ -221,6 +175,208 @@ Each TaskManager has a fixed number of **slots** - think of them as "seats" for 
 ```
 
 **Key formula**: `Total Parallelism = Number of TaskManagers × Slots per TaskManager`
+
+#### ResourceManager
+Bridges Flink and external resource providers:
+- Manages `task slots` across the cluster
+- Communicates with Kubernetes/YARN/Standalone resource providers
+- Allocates TaskManagers based on JobManager requests
+- Dynamically `scales` the cluster up or down as needed
+- Handles `resource lifecycle` management
+
+#### Dispatcher
+*Entry point* for job submission:
+- Provides `REST API` for job submission
+- Hosts the `web dashboard`
+- Manages multiple concurrent job submissions
+- `Coordinates` with JobManager for job execution
+
+#### Checkpoint Coordinator
+Ensures *fault tolerance*:
+- Triggers periodic state snapshots (checkpoints)
+- Coordinates checkpoint across all operators
+- Manages checkpoint barriers through the data stream
+- `Stores checkpoint metadata` and state
+
+### Component Interactions
+
+```
+Client submits job
+    ↓
+Dispatcher receives job
+    ↓
+JobManager creates physical execution plan
+    ↓
+JobManager requests slots from ResourceManager
+    ↓
+ResourceManager allocates/creates TaskManagers
+    ↓
+TaskManagers execute tasks in parallel
+    ↓
+Checkpoint Coordinator manages state snapshots
+    ↓
+Data flows through operators via shuffle mechanism
+```
+
+### Component Architecture Diagram
+
+```mermaid
+graph TB
+    subgraph "Client Side"
+        Client["👤 Client<br/>Job Submission & Monitoring"]
+    end
+
+    subgraph "Control Plane"
+        Dispatcher["🎛️ Dispatcher<br/>REST API Entry Point<br/>Dashboard Host"]
+        JobManager["👨‍💼 JobManager<br/>Orchestration & Scheduling<br/>Checkpoint Coordinator"]
+        ResourceManager["🏢 ResourceManager<br/>Resource Provider Interface<br/>Slot Management"]
+    end
+
+    subgraph "Data Plane - Kubernetes Cluster"
+        subgraph "Worker Pods"
+            TM1["🔧 TaskManager 1<br/>- Slots: 4<br/>- Memory: 4GB<br/>- CPU: 2"]
+            TM2["🔧 TaskManager 2<br/>- Slots: 4<br/>- Memory: 4GB<br/>- CPU: 2"]
+            TM3["🔧 TaskManager 3<br/>- Slots: 4<br/>- Memory: 4GB<br/>- CPU: 2"]
+        end
+    end
+
+    subgraph "State & Monitoring"
+        StateBackend["💾 State Backend<br/>S3/HDFS/RocksDB"]
+        Metrics["📊 Metrics System<br/>Prometheus/JMX"]
+    end
+
+    Client -->|Submit Job| Dispatcher
+    Dispatcher -->|Forward Job| JobManager
+
+    JobManager -->|Request Slots| ResourceManager
+    ResourceManager -->|Launch Pods| TM1
+    ResourceManager -->|Launch Pods| TM2
+    ResourceManager -->|Launch Pods| TM3
+
+    JobManager -->|Assign Tasks| TM1
+    JobManager -->|Assign Tasks| TM2
+    JobManager -->|Assign Tasks| TM3
+    JobManager -->|Trigger Checkpoints| StateBackend
+
+    TM1 -->|Shuffle Data| TM2
+    TM2 -->|Shuffle Data| TM3
+    TM1 -->|Report Status| Metrics
+    TM2 -->|Report Status| Metrics
+    TM3 -->|Report Status| Metrics
+    JobManager -->|Report Metrics| Metrics
+
+    Client -->|Query Status| Dispatcher
+```
+
+### Task Execution Model
+
+Flink transforms logical operations into physical execution plans with parallel tasks. Let's examine how this works using a concrete example from `examples/01_basics/word_count.py`:
+
+#### Word Count Execution Example
+
+**Logical DAG** (from word_count.py):
+```python
+text = env.from_collection(lines)
+counts = text.flat_map(split_words) \
+             .key_by(lambda x: x[0]) \
+             .reduce(lambda a, b: (a[0], a[1] + b[1]))
+counts.print()
+```
+
+This creates the following operator chain:
+- **Source**: Read from collection (`lines`)
+- **FlatMap**: Split lines into (word, 1) tuples
+- **KeyBy**: Partition by word (first element of tuple)
+- **Reduce**: Sum counts per word
+- **Sink**: Print results
+
+**Physical Execution with Parallelism = 4**:
+
+When `env.set_parallelism(4)` is configured, Flink creates 4 parallel instances of each operator:
+
+```
+Input Data:
+["apache flink is great", "flink makes stream processing easy", ...]
+
+Parallel Execution:
+┌─────────────────────────────────────────────────────────────┐
+│ TaskManager 1 (Slots 1-2)                                   │
+├─────────────────────────────────────────────────────────────┤
+│ Slot 1:                                                     │
+│   Source-0 → FlatMap-0 → KeyBy-0 → Reduce-0 → Print-0       │
+│   Processes: ["apache flink is great"]                      │
+│                                                             │
+│ Slot 2:                                                     │
+│   Source-1 → FlatMap-1 → KeyBy-1 → Reduce-1 → Print-1       │
+│   Processes: ["flink makes stream processing easy"]         │
+└─────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────┐
+│ TaskManager 2 (Slots 3-4)                                   │
+├─────────────────────────────────────────────────────────────┤
+│ Slot 3:                                                     │
+│   Source-2 → FlatMap-2 → KeyBy-2 → Reduce-2 → Print-2       │
+│   Processes: ["apache flink apache spark"]                  │
+│                                                             │
+│ Slot 4:                                                     │
+│   Source-3 → FlatMap-3 → KeyBy-3 → Reduce-3 → Print-3       │
+│   Processes: ["stream processing with flink"]               │
+└─────────────────────────────────────────────────────────────┘
+
+Data Shuffle at KeyBy:
+  FlatMap-0 outputs: (apache,1), (flink,1), (is,1), (great,1)
+  FlatMap-1 outputs: (flink,1), (makes,1), (stream,1), ...
+
+  KeyBy partitions by word hash:
+  - All "flink" tuples → Reduce-2 (example)
+  - All "apache" tuples → Reduce-0 (example)
+  - All "stream" tuples → Reduce-1 (example)
+
+Final Output (from all Print sinks):
+  (flink, 6)
+  (apache, 3)
+  (stream, 2)
+  ...
+```
+
+**Key Execution Characteristics**:
+
+1. **Operator Chaining**: Flink chains operators that don't require data shuffle (Source → FlatMap) to minimize network overhead
+2. **Data Partitioning**: KeyBy triggers re-partitioning - all records with same key route to same parallel instance
+3. **Slot Sharing**: Multiple operators share same slot when possible, reducing resource usage
+4. **Pipeline Execution**: Data flows through operators in streaming fashion, not batch-by-batch
+
+#### Generic Task Execution Model
+
+```mermaid
+graph LR
+    subgraph "Logical DAG"
+        Source["Source<br/>Kafka Topic"]
+        Map["Map<br/>Enrich Data"]
+        KeyBy["KeyBy<br/>User ID"]
+        Aggregate["Aggregate<br/>Count Events"]
+        Sink["Sink<br/>Write to DB"]
+    end
+
+    subgraph "Physical Execution with 4 Parallelism"
+        S1["Source-0"] --> M1["Map-0"] --> K1["KeyBy-0"] --> A1["Aggregate-0"] --> SK1["Sink-0"]
+        S2["Source-1"] --> M2["Map-1"] --> K2["KeyBy-1"] --> A2["Aggregate-1"] --> SK2["Sink-1"]
+        S3["Source-2"] --> M3["Map-2"] --> K3["KeyBy-2"] --> A3["Aggregate-2"] --> SK3["Sink-2"]
+        S4["Source-3"] --> M4["Map-3"] --> K4["KeyBy-3"] --> A4["Aggregate-3"] --> SK4["Sink-3"]
+    end
+
+    Source -.->|Parallelizes| S1
+    Source -.->|Parallelizes| S2
+    Source -.->|Parallelizes| S3
+    Source -.->|Parallelizes| S4
+
+    style Source fill:#90EE90
+    style Map fill:#87CEEB
+    style KeyBy fill:#FFD700
+    style Aggregate fill:#FF6B6B
+    style Sink fill:#DDA0DD
+```
+
 
 ---
 

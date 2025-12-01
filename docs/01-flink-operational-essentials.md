@@ -21,7 +21,7 @@
 
 ---
 
-## Introduction to Apache Flink {#introduction}
+## Introduction to Apache Flink
 
 Apache Flink is a distributed stream processing framework designed for stateful computations over both unbounded (streaming) and bounded (batch) data. Unlike traditional batch systems or micro-batch approaches, Flink processes data continuously with:
 
@@ -40,7 +40,7 @@ Apache Flink is a distributed stream processing framework designed for stateful 
 
 ---
 
-## Architecture Overview {#architecture}
+## Architecture Overview
 
 ### Core Components
 
@@ -453,7 +453,7 @@ flinkConfiguration:
 
 ---
 
-## Kubernetes Operator Fundamentals {#kubernetes-operator}
+## Kubernetes Operator Fundamentals
 
 The Flink Kubernetes Operator is the standard way to deploy and manage Flink applications on Kubernetes. It uses Custom Resource Definitions (CRDs) to declare desired state, with the operator reconciling the actual cluster state to match.
 
@@ -586,7 +586,7 @@ spec:
 
 ---
 
-## Cluster Management & Running on Kubernetes {#cluster-management}
+## Cluster Management & Running on Kubernetes
 
 ### Deploying a Flink Cluster
 
@@ -703,7 +703,7 @@ The operator ensures graceful shutdown and cleanup.
 
 ---
 
-## Resource Management {#resource-management}
+## Resource Management
 
 ### CPU and Memory Configuration
 
@@ -765,7 +765,7 @@ flinkConfiguration:
 
 ---
 
-## Task Management & Execution {#task-management}
+## Task Management & Execution
 
 ### Task Slots
 
@@ -845,7 +845,7 @@ source
 
 ---
 
-## Application Deployment & Submission {#application-deployment}
+## Application Deployment & Submission
 
 ### Deployment Modes
 
@@ -986,7 +986,7 @@ Operator workflow:
 
 ---
 
-## Data Flow Processing Pipeline {#data-flow}
+## Data Flow Processing Pipeline
 
 ### Dataflow Model
 
@@ -1160,7 +1160,7 @@ Automatic flow control prevents overwhelming downstream tasks:
 
 ---
 
-## Event-Time Processing & Windowing {#event-time-processing}
+## Event-Time Processing & Windowing
 
 ### Time Semantics
 

@@ -1323,7 +1323,7 @@ stream
 
 ---
 
-## State Management & Fault Tolerance {#fault-tolerance}
+## State Management & Fault Tolerance
 
 ### Types of State
 
@@ -1522,7 +1522,7 @@ flinkConfiguration:
 
 ---
 
-## Monitoring & Observability {#monitoring}
+## Monitoring & Observability
 
 ### Metrics System
 
@@ -1702,7 +1702,7 @@ Alerts:
 
 ---
 
-## Performance Tuning & Configuration {#performance-tuning}
+## Performance Tuning & Configuration
 
 ### Memory Configuration
 
@@ -1876,7 +1876,7 @@ env.getConfig().registerKryoType(Event.class);
 
 ---
 
-## Best Practices & Operational Scenarios {#best-practices}
+## Best Practices & Operational Scenarios
 
 ### Deployment Best Practices
 

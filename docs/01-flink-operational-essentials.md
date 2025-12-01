@@ -1,6 +1,4 @@
-# Apache Flink Operational Essentials Guide
-
-> **Target Audience**: Engineers with zero to basic Flink experience looking to understand how Flink works and how to run it on Kubernetes.
+# Apache Flink Operational Essentials
 
 ## Table of Contents
 
@@ -119,7 +117,7 @@ Flink distributes work across multiple parallel instances:
 
 ```
                     Parallelism = 4
-                    
+
 Source Partition 1 ──► Map Instance 1 ──► Sink Instance 1
 Source Partition 2 ──► Map Instance 2 ──► Sink Instance 2
 Source Partition 3 ──► Map Instance 3 ──► Sink Instance 3
@@ -141,44 +139,44 @@ graph TB
     subgraph "You (Developer)"
         Client["💻 Client<br/>Your Application Code"]
     end
-    
+
     subgraph "Control Plane (The Brain)"
         JM["🧠 JobManager<br/>Coordinates everything"]
         RM["📦 ResourceManager<br/>Manages workers"]
         Dispatcher["🚪 Dispatcher<br/>Entry point & Web UI"]
     end
-    
+
     subgraph "Data Plane (The Workers)"
         TM1["⚙️ TaskManager 1"]
         TM2["⚙️ TaskManager 2"]
         TM3["⚙️ TaskManager 3"]
     end
-    
+
     subgraph "External Systems"
         Source["📥 Source<br/>(Kafka, etc.)"]
         Sink["📤 Sink<br/>(Database, etc.)"]
         State["💾 State Backend<br/>(S3, RocksDB)"]
     end
-    
+
     Client -->|"1. Submit Job"| Dispatcher
     Dispatcher -->|"2. Start Job"| JM
     JM -->|"3. Request Workers"| RM
     RM -->|"4. Create/Assign"| TM1
     RM -->|"4. Create/Assign"| TM2
     RM -->|"4. Create/Assign"| TM3
-    
+
     JM -->|"5. Distribute Tasks"| TM1
     JM -->|"5. Distribute Tasks"| TM2
     JM -->|"5. Distribute Tasks"| TM3
-    
+
     Source --> TM1
     Source --> TM2
     Source --> TM3
-    
+
     TM1 --> Sink
     TM2 --> Sink
     TM3 --> Sink
-    
+
     TM1 -.->|"Checkpoint"| State
     TM2 -.->|"Checkpoint"| State
     TM3 -.->|"Checkpoint"| State
@@ -247,16 +245,16 @@ graph TB
     subgraph "You"
         YAML["📝 FlinkDeployment YAML<br/>Your desired state"]
     end
-    
+
     subgraph "Kubernetes"
         API["☸️ Kubernetes API Server"]
-        
+
         subgraph "Flink Operator"
             Watch["👀 Watch<br/>Monitor for changes"]
             Reconcile["🔄 Reconcile<br/>Compare desired vs actual"]
             Act["🛠️ Act<br/>Create/Update/Delete resources"]
         end
-        
+
         subgraph "Managed Resources"
             JMPod["JobManager Pod"]
             TMPods["TaskManager Pods"]
@@ -264,7 +262,7 @@ graph TB
             ConfigMaps["ConfigMaps"]
         end
     end
-    
+
     YAML -->|"kubectl apply"| API
     API --> Watch
     Watch --> Reconcile
@@ -273,7 +271,7 @@ graph TB
     Act --> TMPods
     Act --> Services
     Act --> ConfigMaps
-    
+
     JMPod -.->|"Status"| Watch
     TMPods -.->|"Status"| Watch
 ```
@@ -293,50 +291,50 @@ graph TB
         subgraph "flink-operator namespace"
             Operator["🎮 Flink Operator<br/>Watches & Reconciles"]
         end
-        
+
         subgraph "your-namespace"
             subgraph "Control Plane Pod"
                 JMContainer["JobManager Container"]
                 JMDispatcher["Dispatcher"]
                 JMResourceMgr["ResourceManager"]
             end
-            
+
             subgraph "Worker Pod 1"
                 TM1["TaskManager 1<br/>Slots: 2"]
             end
-            
+
             subgraph "Worker Pod 2"
                 TM2["TaskManager 2<br/>Slots: 2"]
             end
-            
+
             JMService["JobManager Service<br/>(REST API + RPC)"]
         end
-        
+
         subgraph "External"
             Kafka["Kafka"]
             S3["S3 (State/Checkpoints)"]
         end
     end
-    
+
     subgraph "You"
         kubectl["kubectl apply -f deployment.yaml"]
         WebUI["Flink Web UI<br/>localhost:8081"]
     end
-    
+
     kubectl -->|"1. Create FlinkDeployment"| Operator
     Operator -->|"2. Create JobManager Pod"| JMContainer
     Operator -->|"3. Create Service"| JMService
     JMResourceMgr -->|"4. Request TaskManagers"| Operator
     Operator -->|"5. Create TaskManager Pods"| TM1
     Operator -->|"5. Create TaskManager Pods"| TM2
-    
+
     Kafka --> TM1
     Kafka --> TM2
     TM1 --> S3
     TM2 --> S3
-    
+
     WebUI -->|"port-forward"| JMService
-    
+
     JMContainer --> TM1
     JMContainer --> TM2
 ```
@@ -404,21 +402,21 @@ sequenceDiagram
     participant JobManager
     participant TaskManagers
     participant StateBackend
-    
+
     Note over You,StateBackend: Normal Operation
     You->>Operator: Apply FlinkDeployment
     Operator->>JobManager: Create Pod
     Operator->>TaskManagers: Create Pods
     JobManager->>TaskManagers: Distribute Tasks
     TaskManagers->>StateBackend: Periodic Checkpoints
-    
+
     Note over You,StateBackend: Scaling Up (parallelism 4 → 8)
     You->>Operator: Update FlinkDeployment
     Operator->>StateBackend: Trigger Savepoint
     Operator->>TaskManagers: Stop Old Pods
     Operator->>TaskManagers: Create New Pods (more)
     Operator->>JobManager: Restart from Savepoint
-    
+
     Note over You,StateBackend: Failure Recovery
     TaskManagers--xOperator: Pod Crash!
     Operator->>TaskManagers: Recreate Pod
@@ -439,31 +437,31 @@ spec:
   image: flink:1.20
   flinkVersion: v1_20
   serviceAccount: flink
-  
+
   # Native mode = Flink manages TaskManagers dynamically
   mode: native
-  
+
   # JobManager configuration
   jobManager:
     resource:
       memory: "2048m"
       cpu: 1
     replicas: 1  # Usually 1 for HA, Flink handles leader election
-  
-  # TaskManager configuration  
+
+  # TaskManager configuration
   taskManager:
     resource:
       memory: "4096m"
       cpu: 2
     replicas: 2  # Number of worker pods
-  
+
   # Flink configuration (flink-conf.yaml equivalent)
   flinkConfiguration:
     taskmanager.numberOfTaskSlots: "2"
     state.backend: "rocksdb"
     state.checkpoints.dir: "s3://bucket/checkpoints"
     execution.checkpointing.interval: "60000"
-  
+
   # Job specification (Application mode only)
   job:
     jarURI: local:///opt/flink/jobs/my-job.jar
@@ -502,7 +500,7 @@ source.map().keyBy().sum()     →      ┌────────────�
                                       │  │ source[1]→map[1]→sum[1]│   │
                                       │  └────────────────────────┘   │
                                       └──────────────────────────────┘
-                                      
+
                                       ┌──────────────────────────────┐
                                       │      TaskManager 2            │
                                       │  ┌────────────────────────┐   │
@@ -526,17 +524,17 @@ graph LR
         S1["Source[0]"] --> M1["Map[0]"]
         S2["Source[1]"] --> M2["Map[1]"]
     end
-    
+
     subgraph "TaskManager 2"
         S3["Source[2]"] --> M3["Map[2]"]
         S4["Source[3]"] --> M4["Map[3]"]
     end
-    
+
     subgraph "After KeyBy (Shuffle)"
         R1["Reduce[0]<br/>keys: A-M"]
         R2["Reduce[1]<br/>keys: N-Z"]
     end
-    
+
     M1 -->|"key=Apple"| R1
     M1 -->|"key=Zebra"| R2
     M2 -->|"key=Banana"| R1
@@ -584,27 +582,27 @@ sequenceDiagram
     participant TM1 as TaskManager 1
     participant TM2 as TaskManager 2
     participant S3 as State Backend (S3)
-    
+
     Note over JM,S3: Checkpoint Triggered (every 60s by default)
-    
+
     JM->>TM1: Inject Checkpoint Barrier
     JM->>TM2: Inject Checkpoint Barrier
-    
+
     Note over TM1: Barrier arrives, snapshot state
     TM1->>S3: Save State (async)
     Note over TM2: Barrier arrives, snapshot state
     TM2->>S3: Save State (async)
-    
+
     S3-->>TM1: Ack
     S3-->>TM2: Ack
-    
+
     TM1-->>JM: Checkpoint Complete
     TM2-->>JM: Checkpoint Complete
-    
+
     JM->>JM: Mark Checkpoint Successful
-    
+
     Note over JM,S3: If failure occurs later...
-    
+
     JM->>S3: Load Last Checkpoint
     JM->>TM1: Restore State
     JM->>TM2: Restore State
@@ -733,7 +731,7 @@ Tumbling Window (Non-overlapping)
 |  Window 1  |  Window 2  |  Window 3  |  Window 4  |
    5 min         5 min        5 min        5 min
 
-Sliding Window (Overlapping)  
+Sliding Window (Overlapping)
 ────────────────────────────────────────────────────────►
 |     Window 1 (10 min)     |
       |     Window 2 (10 min)     |

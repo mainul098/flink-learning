@@ -19,7 +19,7 @@ import time
 def word_count():
     # Create execution environment
     env = StreamExecutionEnvironment.get_execution_environment()
-    env.set_parallelism(4)
+    env.set_parallelism(1)
 
     # Sample data - simulating a stream
     lines = [

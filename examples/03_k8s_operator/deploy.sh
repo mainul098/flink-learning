@@ -1,104 +1,177 @@
 #!/bin/bash
-# Deployment script for Flink Word Count example with Kafka
-
 set -e
 
-echo "==========================================="
-echo "Flink Word Count with Kafka Deployment"
-echo "==========================================="
+# Colors for output
+GREEN='\033[0;32m'
+BLUE='\033[0;34m'
+YELLOW='\033[1;33m'
+RED='\033[0;31m'
+NC='\033[0m' # No Color
+
+echo -e "${BLUE}========================================${NC}"
+echo -e "${BLUE}Flink Kubernetes Operator Deployment${NC}"
+echo -e "${BLUE}========================================${NC}"
 echo ""
 
-# Check if kubectl is available
-if ! command -v kubectl &> /dev/null; then
-    echo "❌ kubectl not found. Please install kubectl first."
-    exit 1
-fi
-
-# Check if docker is available
-if ! command -v docker &> /dev/null; then
-    echo "❌ docker not found. Please install docker/colima first."
-    exit 1
-fi
-
-echo "📦 Building Docker image with Kafka connector..."
-docker build -t flink-word-count:latest .
-
-if [ $? -ne 0 ]; then
-    echo "❌ Docker build failed"
-    exit 1
-fi
-
+# Step 1: Install CRDs for Flink Operator
+echo -e "${GREEN}[1/7] Installing Flink Operator CRDs...${NC}"
+kubectl apply -f https://raw.githubusercontent.com/apache/flink-kubernetes-operator/release-1.7/helm/flink-kubernetes-operator/crds/flinkdeployments.flink.apache.org-v1.yml
+kubectl apply -f https://raw.githubusercontent.com/apache/flink-kubernetes-operator/release-1.7/helm/flink-kubernetes-operator/crds/flinksessionjobs.flink.apache.org-v1.yml
 echo ""
-echo "🚀 Deploying infrastructure (Kafka, Zookeeper, Kafka UI)..."
-kubectl apply -f deployment.yaml
 
+# Step 2: Install Flink Operator
+echo -e "${GREEN}[2/7] Installing Flink Kubernetes Operator...${NC}"
+kubectl apply -f operator-install.yaml
 echo ""
-echo "⏳ Waiting for Zookeeper to be ready..."
+
+# Wait for operator to be ready
+echo -e "${YELLOW}Waiting for operator to be ready...${NC}"
+kubectl wait --for=condition=available --timeout=120s deployment/flink-kubernetes-operator -n flink-operator-system
+echo ""
+
+# Step 3: Deploy infrastructure (Kafka, Zookeeper, etc.)
+echo -e "${GREEN}[3/7] Deploying infrastructure (Kafka, Zookeeper, Kafka UI)...${NC}"
+kubectl apply -f infrastructure.yaml
+echo ""
+
+# Wait for Zookeeper
+echo -e "${YELLOW}Waiting for Zookeeper to be ready...${NC}"
 kubectl wait --for=condition=ready pod -l app=zookeeper --timeout=120s
-
 echo ""
-echo "⏳ Waiting for Kafka to be ready..."
+
+# Wait for Kafka
+echo -e "${YELLOW}Waiting for Kafka to be ready...${NC}"
 kubectl wait --for=condition=ready pod -l app=kafka --timeout=120s
-
 echo ""
-echo "📝 Creating Kafka topic 'input-text'..."
-kubectl exec kafka-0 -- kafka-topics --create --topic input-text --bootstrap-server localhost:9092 --partitions 4 --replication-factor 1 --if-not-exists
 
+# Step 4: Build Docker image
+echo -e "${GREEN}[4/7] Building Docker image...${NC}"
+docker build -t flink-word-count:latest .
 echo ""
-echo "📨 Sending test messages to Kafka..."
-kubectl exec kafka-0 -- bash -c "echo -e 'hello world\nhello flink\nflink kubernetes operator\nhello kubernetes\nflink streaming\napache flink is great\nkubernetes is powerful\nhello apache flink\nstreaming data processing\nreal time analytics' | kafka-console-producer --broker-list localhost:9092 --topic input-text"
 
+# Load image into colima (if using colima)
+if command -v colima &> /dev/null; then
+    echo -e "${YELLOW}Image available in colima context${NC}"
+else
+    echo -e "${YELLOW}Loading image into kind/minikube (if needed)...${NC}"
+    # For kind: kind load docker-image flink-word-count:latest
+    # For minikube: minikube image load flink-word-count:latest
+fi
 echo ""
-echo "🎯 Starting Flink Word Count job..."
-# Delete pod if it already exists
-kubectl delete pod flink-word-count --ignore-not-found=true
 
-# Wait a moment for cleanup
-sleep 2
+# Step 5: Create Kafka topic and seed data
+echo -e "${GREEN}[5/7] Creating Kafka topic and sending test messages...${NC}"
+sleep 5  # Give Kafka a moment to fully initialize
 
-# Start the job
-kubectl apply -f deployment.yaml
+# Create topic
+kubectl exec kafka-0 -- kafka-topics \
+  --create \
+  --if-not-exists \
+  --topic input-text \
+  --partitions 4 \
+  --replication-factor 1 \
+  --bootstrap-server localhost:9092 2>/dev/null || echo "Topic may already exist"
 
+# Send test messages
+echo -e "${YELLOW}Sending test messages to Kafka...${NC}"
+kubectl exec -i kafka-0 -- kafka-console-producer \
+  --broker-list localhost:9092 \
+  --topic input-text << EOF
+Hello Flink Kubernetes Operator
+Apache Flink is a powerful stream processing framework
+Kubernetes makes deployment and scaling easy
+Flink Operator manages Flink clusters automatically
+This is a production ready deployment
+Hello again from the Flink world
+Streaming data processing with Flink
+Real time analytics with Apache Flink
+EOF
 echo ""
-echo "⏳ Waiting for Kafka UI to be ready..."
-kubectl wait --for=condition=available --timeout=60s deployment/kafka-ui
 
+# Step 6: Deploy FlinkDeployment
+echo -e "${GREEN}[6/7] Deploying Flink application...${NC}"
+kubectl apply -f flink-deployment.yaml
 echo ""
-echo "🌐 Starting Kafka UI port-forward on port 9090..."
-kubectl port-forward svc/kafka-ui 9090:8080 > /dev/null 2>&1 &
+
+# Wait for Flink deployment to start
+echo -e "${YELLOW}Waiting for Flink JobManager to be ready...${NC}"
+sleep 10
+kubectl wait --for=condition=ready pod -l app=word-count-app,component=jobmanager --timeout=180s 2>/dev/null || echo "Deployment in progress..."
+echo ""
+
+# Step 7: Submit PyFlink Job
+echo -e "${GREEN}[7/9] Submitting PyFlink job to Flink cluster...${NC}"
+JM_POD=$(kubectl get pods -l app=word-count-app,component=jobmanager -o jsonpath='{.items[0].metadata.name}')
+if [ -n "$JM_POD" ]; then
+    kubectl exec $JM_POD -- /opt/flink/bin/flink run \
+        --python /opt/flink/usrlib/simple_word_count.py \
+        --target remote \
+        --jobmanager localhost:8082 2>&1 | grep -E "Job has been submitted|JobID"
+    echo -e "${GREEN}✓ Job submitted successfully${NC}"
+else
+    echo -e "${RED}✗ JobManager pod not found${NC}"
+fi
+echo ""
+
+# Step 8: Wait for TaskManagers
+echo -e "${GREEN}[8/9] Waiting for TaskManagers to be created...${NC}"
+sleep 10
+kubectl wait --for=condition=ready pod -l app=word-count-app,component=taskmanager --timeout=60s 2>/dev/null || echo "TaskManagers starting..."
+echo ""
+
+# Step 9: Start port-forwards
+echo -e "${GREEN}[9/9] Starting port-forwards...${NC}"
+kubectl port-forward svc/kafka-ui 9092:8080 > /dev/null 2>&1 &
 KAFKA_UI_PID=$!
-echo "   Kafka UI available at: http://localhost:9090"
-echo "   Port-forward PID: $KAFKA_UI_PID"
+echo -e "${GREEN}✓ Kafka UI available at http://localhost:9092${NC}"
 
+kubectl port-forward svc/word-count-app-rest 9091:8082 > /dev/null 2>&1 &
+FLINK_UI_PID=$!
+echo -e "${GREEN}✓ Flink UI available at http://localhost:9091${NC}"
 echo ""
-echo "⏳ Waiting for Flink job to start (15 seconds)..."
-sleep 15
 
+echo -e "${BLUE}========================================${NC}"
+echo -e "${GREEN}✓ Deployment Complete!${NC}"
+echo -e "${BLUE}========================================${NC}"
 echo ""
-echo "✅ Deployment complete!"
+echo -e "${YELLOW}Resources deployed:${NC}"
+echo "  • Flink Kubernetes Operator (flink-operator-system namespace)"
+echo "  • Flink JobManager + TaskManagers (default namespace)"
+echo "  • PyFlink Word Count Job (running)"
+echo "  • Kafka + Zookeeper"
+echo "  • Kafka UI (http://localhost:9092)"
+echo "  • Flink UI (http://localhost:9091)"
 echo ""
-echo "==========================================="
-echo "View Results:"
-echo "==========================================="
+echo -e "${YELLOW}Useful commands:${NC}"
 echo ""
-echo "1. View word count output:"
-echo "   kubectl logs flink-word-count | grep '^[12]>' | sort"
+echo -e "${BLUE}Check FlinkDeployment status:${NC}"
+echo "  kubectl get flinkdeployment word-count-app"
+echo "  kubectl describe flinkdeployment word-count-app"
 echo ""
-echo "2. Follow job logs in real-time:"
-echo "   kubectl logs -f flink-word-count"
+echo -e "${BLUE}View TaskManager logs (word count output):${NC}"
+echo "  kubectl logs -l app=word-count-app,component=taskmanager -f"
 echo ""
-echo "3. Check job status:"
-echo "   kubectl get pod flink-word-count"
+echo -e "${BLUE}View JobManager logs:${NC}"
+echo "  kubectl logs -l app=word-count-app,component=jobmanager -f"
 echo ""
-echo "4. Send more test messages to Kafka:"
-echo "   kubectl exec -it kafka-0 -- kafka-console-producer --broker-list localhost:9092 --topic input-text"
-echo "   (Type messages and press Ctrl-D when done)"
+echo -e "${BLUE}Check Flink pods:${NC}"
+echo "  kubectl get pods -l app=word-count-app"
 echo ""
-echo "5. Consume messages from Kafka:"
-echo "   kubectl exec -it kafka-0 -- kafka-console-consumer --bootstrap-server localhost:9092 --topic input-text --from-beginning"
+echo -e "${BLUE}Check running jobs:${NC}"
+echo "  kubectl exec -l component=jobmanager,app=word-count-app -- curl -s http://localhost:8082/jobs"
 echo ""
-echo "6. Access Kafka UI (already running):"
-echo "   http://localhost:9090"
-echo "   Stop port-forward: kill $KAFKA_UI_PID"
+echo -e "${BLUE}Send more messages to Kafka:${NC}"
+echo "  kubectl exec -it kafka-0 -- kafka-console-producer \\"
+echo "    --broker-list localhost:9092 \\"
+echo "    --topic input-text"
 echo ""
-echo "==========================================="
+echo -e "${BLUE}Access UIs:${NC}"
+echo "  Flink UI:  http://localhost:9091"
+echo "  Kafka UI:  http://localhost:9092"
+echo ""
+echo -e "${BLUE}Monitor operator logs:${NC}"
+echo "  kubectl logs -n flink-operator-system deployment/flink-kubernetes-operator -f"
+echo ""
+echo -e "${RED}Cleanup:${NC}"
+echo "  ./cleanup.sh"
+echo ""

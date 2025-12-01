@@ -1,0 +1,86 @@
+apiVersion: flink.apache.org/v1beta1
+kind: FlinkDeployment
+metadata:
+  name: word-count-app
+  namespace: default
+spec:
+  image: flink-word-count:latest
+  imagePullPolicy: IfNotPresent
+  flinkVersion: v1_18
+  serviceAccount: flink
+  
+  # Flink Configuration
+  flinkConfiguration:
+    rest.port: "8082"
+    taskmanager.numberOfTaskSlots: "2"
+    state.backend: rocksdb
+    state.checkpoints.dir: file:///tmp/flink-checkpoints
+    state.savepoints.dir: file:///tmp/flink-savepoints
+    execution.checkpointing.interval: 60s
+    execution.checkpointing.mode: EXACTLY_ONCE
+    execution.checkpointing.min-pause: 30s
+    execution.checkpointing.max-concurrent-checkpoints: "1"
+    restart-strategy: fixed-delay
+    restart-strategy.fixed-delay.attempts: "3"
+    restart-strategy.fixed-delay.delay: 10s
+    high-availability: org.apache.flink.kubernetes.highavailability.KubernetesHaServicesFactory
+    high-availability.storageDir: file:///tmp/flink-ha
+    kubernetes.operator.metrics.reporter.slf4j.factory.class: org.apache.flink.metrics.slf4j.Slf4jReporterFactory
+    kubernetes.operator.metrics.reporter.slf4j.interval: 60 SECONDS
+  
+  # Job Manager Configuration
+  jobManager:
+    replicas: 1
+    resource:
+      memory: "1024m"
+      cpu: 0.5
+    podTemplate:
+      apiVersion: v1
+      kind: Pod
+      metadata:
+        name: jobmanager-pod
+      spec:
+        containers:
+        - name: flink-main-container
+          env:
+          - name: KAFKA_BROKERS
+            value: "kafka:9092"
+          - name: KAFKA_TOPIC
+            value: "input-text"
+          volumeMounts:
+          - name: flink-logs
+            mountPath: /opt/flink/log
+        volumes:
+        - name: flink-logs
+          emptyDir: {}
+  
+  # Task Manager Configuration  
+  taskManager:
+    replicas: 2
+    resource:
+      memory: "1024m"
+      cpu: 0.5
+    podTemplate:
+      apiVersion: v1
+      kind: Pod
+      metadata:
+        name: taskmanager-pod
+      spec:
+        containers:
+        - name: flink-main-container
+          env:
+          - name: KAFKA_BROKERS
+            value: "kafka:9092"
+          - name: KAFKA_TOPIC
+            value: "input-text"
+          volumeMounts:
+          - name: flink-logs
+            mountPath: /opt/flink/log
+        volumes:
+        - name: flink-logs
+          emptyDir: {}
+  
+  # Note: PyFlink applications work better with session mode
+  # The operator manages the Flink cluster lifecycle
+  # Jobs can be submitted via the Flink REST API or CLI
+  mode: native

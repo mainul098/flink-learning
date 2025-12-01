@@ -1,0 +1,167 @@
+# Install Flink Kubernetes Operator using Helm
+# This file contains the manual YAML-based installation as an alternative to Helm
+# For production, use: helm install flink-kubernetes-operator flink-operator-repo/flink-kubernetes-operator
+
+---
+# Namespace for operator (optional, can use default)
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: flink-operator-system
+
+---
+# ServiceAccount for Flink Operator
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: flink-operator
+  namespace: flink-operator-system
+
+---
+# ClusterRole for Flink Operator
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: flink-operator
+rules:
+  # Core resources
+  - apiGroups: [""]
+    resources: ["pods", "services", "endpoints", "configmaps", "events", "secrets"]
+    verbs: ["create", "delete", "get", "list", "patch", "update", "watch"]
+  - apiGroups: [""]
+    resources: ["pods/log", "pods/status"]
+    verbs: ["get", "list"]
+  
+  # Apps resources
+  - apiGroups: ["apps"]
+    resources: ["deployments", "deployments/finalizers"]
+    verbs: ["create", "delete", "get", "list", "patch", "update", "watch"]
+  
+  # Flink CRDs
+  - apiGroups: ["flink.apache.org"]
+    resources: ["flinkdeployments", "flinkdeployments/status", "flinkdeployments/finalizers"]
+    verbs: ["create", "delete", "get", "list", "patch", "update", "watch"]
+  - apiGroups: ["flink.apache.org"]
+    resources: ["flinksessionjobs", "flinksessionjobs/status", "flinksessionjobs/finalizers"]
+    verbs: ["create", "delete", "get", "list", "patch", "update", "watch"]
+  
+  # Coordination
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["create", "delete", "get", "list", "patch", "update", "watch"]
+
+---
+# ClusterRoleBinding for Flink Operator
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: flink-operator
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: flink-operator
+subjects:
+  - kind: ServiceAccount
+    name: flink-operator
+    namespace: flink-operator-system
+
+---
+# Flink Operator Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: flink-kubernetes-operator
+  namespace: flink-operator-system
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: flink-kubernetes-operator
+  template:
+    metadata:
+      labels:
+        app: flink-kubernetes-operator
+    spec:
+      serviceAccountName: flink-operator
+      containers:
+      - name: flink-kubernetes-operator
+        image: apache/flink-kubernetes-operator:1.7.0
+        imagePullPolicy: IfNotPresent
+        command:
+        - /docker-entrypoint.sh
+        - operator
+        env:
+        - name: OPERATOR_NAMESPACE
+          value: "default"
+        - name: OPERATOR_NAME
+          value: "flink-kubernetes-operator"
+        - name: FLINK_CONF_DIR
+          value: "/opt/flink/conf"
+        - name: LOG_CONFIG
+          value: "-Dlog4j.configurationFile=/opt/flink/conf/log4j-operator.properties"
+        - name: JVM_ARGS
+          value: ""
+        ports:
+        - containerPort: 8085
+          name: health
+        livenessProbe:
+          httpGet:
+            path: /
+            port: health
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /
+            port: health
+          initialDelaySeconds: 10
+          periodSeconds: 10
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "250m"
+          limits:
+            memory: "1Gi"
+            cpu: "500m"
+        volumeMounts:
+        - name: flink-config
+          mountPath: /opt/flink/conf
+      volumes:
+      - name: flink-config
+        configMap:
+          name: flink-operator-config
+          items:
+          - key: flink-conf.yaml
+            path: flink-conf.yaml
+          - key: log4j-operator.properties
+            path: log4j-operator.properties
+
+---
+# ConfigMap for Flink Operator Configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: flink-operator-config
+  namespace: flink-operator-system
+data:
+  flink-conf.yaml: |
+    kubernetes.operator.reconcile.interval: 60s
+    kubernetes.operator.reconcile.parallelism: 5
+    kubernetes.operator.observer.progress-check.interval: 10s
+    kubernetes.operator.observer.savepoint.trigger.grace-period: 10s
+    kubernetes.operator.savepoint.history.max.count: 10
+    kubernetes.operator.savepoint.history.max.age: 24h
+    kubernetes.operator.exception.stacktrace.max.length: 2048
+    kubernetes.operator.jm-deployment-recovery.enabled: true
+    kubernetes.operator.watched.namespaces: default
+  log4j-operator.properties: |
+    rootLogger.level = INFO
+    rootLogger.appenderRef.console.ref = ConsoleAppender
+    
+    appender.console.name = ConsoleAppender
+    appender.console.type = CONSOLE
+    appender.console.layout.type = PatternLayout
+    appender.console.layout.pattern = %d{yyyy-MM-dd HH:mm:ss,SSS} %-5p %-60c %x - %m%n
+    
+    logger.operator.name = org.apache.flink.kubernetes.operator
+    logger.operator.level = INFO

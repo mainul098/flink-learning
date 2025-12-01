@@ -2,19 +2,22 @@
 
 ## Table of Contents
 
-1. [Introduction to Apache Flink](#introduction)
-2. [Architecture Overview](#architecture)
-3. [Kubernetes Operator Fundamentals](#kubernetes-operator)
-4. [Cluster Management & Running on Kubernetes](#cluster-management)
+1. [Introduction to Apache Flink](#introduction-to-apache-flink)
+2. [Architecture Overview](#architecture-overview)
+3. [Kubernetes Operator Fundamentals](#kubernetes-operator-fundamentals)
+4. [Cluster Management & Running on Kubernetes](#cluster-management--running-on-kubernetes)
 5. [Resource Management](#resource-management)
-6. [Task Management & Execution](#task-management)
-7. [Application Deployment & Submission](#application-deployment)
-8. [Data Flow Processing Pipeline](#data-flow)
-9. [Event-Time Processing & Windowing](#event-time-processing)
-10. [State Management & Fault Tolerance](#fault-tolerance)
-11. [Monitoring & Observability](#monitoring)
-12. [Performance Tuning & Configuration](#performance-tuning)
-13. [Best Practices & Operational Scenarios](#best-practices)
+6. [Task Management & Execution](#task-management--execution)
+7. [Application Deployment & Submission](#application-deployment--submission)
+8. [Data Flow Processing Pipeline](#data-flow-processing-pipeline)
+9. [Event-Time Processing & Windowing](#event-time-processing--windowing)
+10. [State Management & Fault Tolerance](#state-management--fault-tolerance)
+11. [Monitoring & Observability](#monitoring--observability)
+12. [Performance Tuning & Configuration](#performance-tuning--configuration)
+13. [Best Practices & Operational Scenarios](#best-practices--operational-scenarios)
+14. [Advanced Topics](#advanced-topics)
+15. [Conclusion](#conclusion)
+16. [Additional Resources](#additional-resources)
 
 ---
 

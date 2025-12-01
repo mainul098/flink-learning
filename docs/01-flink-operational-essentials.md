@@ -187,35 +187,35 @@ Parallel Execution:
 │ TaskManager 1 (Slots 1-2)                                   │
 ├─────────────────────────────────────────────────────────────┤
 │ Slot 1:                                                     │
-│   Source-0 → FlatMap-0 → KeyBy-0 → Reduce-0 → Print-0     │
+│   Source-0 → FlatMap-0 → KeyBy-0 → Reduce-0 → Print-0       │
 │   Processes: ["apache flink is great"]                      │
 │                                                             │
 │ Slot 2:                                                     │
-│   Source-1 → FlatMap-1 → KeyBy-1 → Reduce-1 → Print-1     │
-│   Processes: ["flink makes stream processing easy"]        │
+│   Source-1 → FlatMap-1 → KeyBy-1 → Reduce-1 → Print-1       │
+│   Processes: ["flink makes stream processing easy"]         │
 └─────────────────────────────────────────────────────────────┘
 
 ┌─────────────────────────────────────────────────────────────┐
 │ TaskManager 2 (Slots 3-4)                                   │
 ├─────────────────────────────────────────────────────────────┤
 │ Slot 3:                                                     │
-│   Source-2 → FlatMap-2 → KeyBy-2 → Reduce-2 → Print-2     │
+│   Source-2 → FlatMap-2 → KeyBy-2 → Reduce-2 → Print-2       │
 │   Processes: ["apache flink apache spark"]                  │
 │                                                             │
 │ Slot 4:                                                     │
-│   Source-3 → FlatMap-3 → KeyBy-3 → Reduce-3 → Print-3     │
+│   Source-3 → FlatMap-3 → KeyBy-3 → Reduce-3 → Print-3       │
 │   Processes: ["stream processing with flink"]               │
 └─────────────────────────────────────────────────────────────┘
 
 Data Shuffle at KeyBy:
   FlatMap-0 outputs: (apache,1), (flink,1), (is,1), (great,1)
   FlatMap-1 outputs: (flink,1), (makes,1), (stream,1), ...
-  
+
   KeyBy partitions by word hash:
   - All "flink" tuples → Reduce-2 (example)
   - All "apache" tuples → Reduce-0 (example)
   - All "stream" tuples → Reduce-1 (example)
-  
+
 Final Output (from all Print sinks):
   (flink, 6)
   (apache, 3)
@@ -262,6 +262,193 @@ graph LR
 ```
 
 ### Slot and Task Distribution
+
+Slots are the fundamental resource unit in Flink that enable parallel execution. Understanding how slots work and how tasks are distributed across them is crucial for optimizing resource utilization.
+
+#### What is a Task Slot?
+
+A **task slot** is a fixed slice of resources within a TaskManager:
+- **Memory isolation**: Each slot gets a dedicated portion of TaskManager memory
+- **Execution unit**: One slot can execute one parallel instance of a task pipeline
+- **Sharing enabled**: Multiple operators from the same job can share a slot (default behavior)
+- **Configuration**: Set via `taskmanager.numberOfTaskSlots`
+
+**Think of it like this**: If a TaskManager is an apartment building, slots are individual apartments. Each apartment (slot) has fixed resources and can house multiple related tasks (roommates) that work together.
+
+#### Word Count Slot Distribution Example
+
+Let's see how our `word_count.py` example with `parallelism=4` distributes across slots:
+
+**Configuration**:
+```yaml
+taskManager:
+  replicas: 2                    # 2 TaskManager pods
+  resource:
+    memory: "4096m"
+    cpu: 2
+
+flinkConfiguration:
+  taskmanager.numberOfTaskSlots: "2"  # 2 slots per TaskManager
+  parallelism.default: "4"             # 4 parallel tasks total
+```
+
+**Calculation**:
+- Total available slots = 2 TaskManagers × 2 slots = **4 slots**
+- Job parallelism = **4**
+- Result: Each slot runs 1 parallel task pipeline ✓
+
+**Physical Distribution**:
+
+```
+╔═══════════════════════════════════════════════════════════════╗
+║ TaskManager 1 (Pod 1) - Memory: 4GB, CPU: 2                   ║
+╠═══════════════════════════════════════════════════════════════╣
+║                                                               ║
+║  ┌─────────────────────────────────────────────────────┐      ║
+║  │ Slot 1 (2GB memory, ~1 CPU)                         │      ║
+║  ├─────────────────────────────────────────────────────┤      ║
+║  │ Chained Operators:                                  │      ║
+║  │   Source-0 ──→ FlatMap-0 ──→ [Network Shuffle]      │      ║
+║  │                                ↓                    │      ║
+║  │   Reduce-0 ─────────────────→ Print-0               │      ║
+║  │                                                     │      ║
+║  │ Processing:                                         │      ║
+║  │   Input:  "apache flink is great"                   │      ║
+║  │   After FlatMap: (apache,1), (flink,1), (is,1)...   │      ║
+║  │   After KeyBy shuffle: receives all "apache" keys   │      ║
+║  │   Output: (apache, 3)                               │      ║
+║  └─────────────────────────────────────────────────────┘      ║
+║                                                               ║
+║  ┌─────────────────────────────────────────────────────┐      ║
+║  │ Slot 2 (2GB memory, ~1 CPU)                         │      ║
+║  ├─────────────────────────────────────────────────────┤      ║
+║  │ Chained Operators:                                  │      ║
+║  │   Source-1 ──→ FlatMap-1 ──→ [Network Shuffle]      │      ║
+║  │                                ↓                    │      ║
+║  │   Reduce-1 ─────────────────→ Print-1               │      ║
+║  │                                                     │      ║
+║  │ Processing:                                         │      ║
+║  │   Input:  "flink makes stream processing easy"      │      ║
+║  │   After FlatMap: (flink,1), (makes,1)...            │      ║
+║  │   After KeyBy shuffle: receives all "makes" keys    │      ║
+║  │   Output: (makes, 1), (easy, 1)                     │      ║
+║  └─────────────────────────────────────────────────────┘      ║
+╚═══════════════════════════════════════════════════════════════╝
+
+╔═══════════════════════════════════════════════════════════════╗
+║ TaskManager 2 (Pod 2) - Memory: 4GB, CPU: 2                   ║
+╠═══════════════════════════════════════════════════════════════╣
+║                                                               ║
+║  ┌─────────────────────────────────────────────────────┐      ║
+║  │ Slot 3 (2GB memory, ~1 CPU)                         │      ║
+║  ├─────────────────────────────────────────────────────┤      ║
+║  │ Chained Operators:                                  │      ║
+║  │   Source-2 ──→ FlatMap-2 ──→ [Network Shuffle]      │      ║
+║  │                                ↓                    │      ║
+║  │   Reduce-2 ─────────────────→ Print-2               │      ║
+║  │                                                     │      ║
+║  │ Processing:                                         │      ║
+║  │   Input:  "apache flink apache spark"               │      ║
+║  │   After FlatMap: (apache,1), (flink,1)...           │      ║
+║  │   After KeyBy shuffle: receives all "flink" keys    │      ║
+║  │   Output: (flink, 6)                                │      ║
+║  └─────────────────────────────────────────────────────┘      ║
+║                                                               ║
+║  ┌─────────────────────────────────────────────────────┐      ║
+║  │ Slot 4 (2GB memory, ~1 CPU)                         │      ║
+║  ├─────────────────────────────────────────────────────┤      ║
+║  │ Chained Operators:                                  │      ║
+║  │   Source-3 ──→ FlatMap-3 ──→ [Network Shuffle]      │      ║
+║  │                                ↓                    │      ║
+║  │   Reduce-3 ─────────────────→ Print-3               │      ║
+║  │                                                     │      ║
+║  │ Processing:                                         │      ║
+║  │   Input:  "stream processing with flink"            │      ║
+║  │   After FlatMap: (stream,1), (processing,1)...      │      ║
+║  │   After KeyBy shuffle: receives all "stream" keys   │      ║
+║  │   Output: (stream, 2), (processing, 2)              │      ║
+║  └─────────────────────────────────────────────────────┘      ║
+╚═══════════════════════════════════════════════════════════════╝
+
+Network Shuffle Between Slots:
+  Slot 1 FlatMap ──┐
+  Slot 2 FlatMap ──┼──→ Hash Partition by Key ──→ Route to correct Reduce
+  Slot 3 FlatMap ──┤
+  Slot 4 FlatMap ──┘
+
+  Example: All (flink, 1) tuples from all 4 slots → Reduce-2 in Slot 3
+```
+
+#### Key Concepts Illustrated
+
+**1. Operator Chaining (Within Slot)**:
+```
+Source-0 → FlatMap-0  (Chained - no network overhead)
+     ↓
+  [Network Shuffle at KeyBy boundary]
+     ↓
+Reduce-0 → Print-0    (Chained - no network overhead)
+```
+Operators connected with arrows (→) within the same slot execute in the same thread, passing data via local method calls.
+
+**2. Slot Sharing**:
+- All operators from the **same parallel subtask** share one slot
+- Reduces resource requirements: Instead of 4 operators × 4 parallelism = 16 slots, we only need 4 slots
+- Better resource utilization when operators have different resource profiles
+
+**3. Network Shuffle**:
+- Occurs at KeyBy boundaries
+- Data from all 4 FlatMap instances gets redistributed
+- Each Reduce instance receives all tuples for its assigned key range
+- Cross-TaskManager communication happens here
+
+**4. Memory Distribution**:
+```
+TaskManager Memory (4GB):
+  ├─ Slot 1: ~2GB (shared by Source-0, FlatMap-0, Reduce-0, Print-0)
+  └─ Slot 2: ~2GB (shared by Source-1, FlatMap-1, Reduce-1, Print-1)
+
+Within each slot:
+  ├─ Heap memory: For operator state and objects
+  ├─ Network buffers: For shuffle data
+  └─ Framework overhead: Flink runtime structures
+```
+
+#### Sizing Guidelines
+
+**How many slots per TaskManager?**
+```
+Rule of thumb: slots_per_tm = number_of_cpu_cores
+
+Examples:
+- 2 CPU cores → 2 slots
+- 4 CPU cores → 4 slots
+- 8 CPU cores → 6-8 slots (can tune based on I/O vs CPU bound)
+```
+
+**Total slots needed**:
+```
+total_slots ≥ max_parallelism_across_all_jobs
+
+For single job:
+  required_slots = job_parallelism = 4
+
+With 2 TaskManagers × 2 slots = 4 total slots ✓
+```
+
+**Insufficient slots scenario**:
+```yaml
+# BAD: Not enough slots
+taskManager:
+  replicas: 1
+flinkConfiguration:
+  taskmanager.numberOfTaskSlots: "2"
+  parallelism.default: "4"  # Needs 4 slots, only 2 available!
+
+# Result: Job fails with "Not enough task slots available"
+```
+
+#### Generic Slot Distribution Pattern
 
 ```mermaid
 graph TD

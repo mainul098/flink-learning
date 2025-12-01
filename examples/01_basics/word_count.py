@@ -20,7 +20,7 @@ def word_count():
     # Create execution environment
     env = StreamExecutionEnvironment.get_execution_environment()
     env.set_parallelism(1)
-    
+
     # Sample data - simulating a stream
     lines = [
         "apache flink is great",
@@ -29,24 +29,24 @@ def word_count():
         "stream processing with flink",
         "flink flink flink"
     ]
-    
+
     # Create stream from collection
     text = env.from_collection(lines)
-    
+
     # Split lines into words
     def split_words(line):
         for word in line.lower().split():
             if word:
                 yield (word, 1)
-    
+
     # Process: flatMap -> keyBy -> sum
     counts = text.flat_map(split_words) \
                  .key_by(lambda x: x[0]) \
                  .reduce(lambda a, b: (a[0], a[1] + b[1]))
-    
+
     # Print results
     counts.print()
-    
+
     # Execute
     env.execute("PyFlink Word Count")
 
